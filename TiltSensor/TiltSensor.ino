@@ -10,11 +10,18 @@ File myFile;
 RTC_DS1307 RTC;
 ADXL345 adxl = ADXL345();
 
+int interruptPin = 2;                 // Setup pin 2 to be the interrupt pin (for most Arduino Boards)
+
 const int chipSelectSD = 4;
-unsigned long delayStart = 1000;
-String readingEntry = "";
+const unsigned long delayStart = 1000;
+unsigned long previousMicros = 0;
+unsigned long currentMicrosTemp = 0;
+//const int FIFOentries = 8;
+bool fifoFull = 1;
+
 String fileName;
 char fileNameChar[10];
+
 
 void abortLedWarning(int millisOn, int millisOff) {
   while(1) {
@@ -28,10 +35,11 @@ void abortLedWarning(int millisOn, int millisOff) {
 void ADXL345Setup() {
   adxl.powerOn();                     // Power on the ADXL345
 
-  adxl.setRate(50);
-  adxl.set_bw(25);
+  adxl.writeTo(ADXL345_BW_RATE, ADXL345_BW_12_5);
 
   adxl.setFIFOMode("FIFO");
+  adxl.setInterruptMapping(1, 0);
+  adxl.setInterrupt(1 ,1);
 
   adxl.setRangeSetting(2);           // Give the range settings
                                       // Accepted values are 2g, 4g, 8g or 16g
@@ -79,7 +87,7 @@ void SDModuleSetup() {
 }
 
 void setup(){
-  Serial.begin(9600);
+  Serial.begin(250000);
 
   ADXL345Setup();
 
@@ -95,41 +103,66 @@ void setup(){
   fileName.toCharArray(fileNameChar, fileName.length()+1);
   myFile = SD.open(fileNameChar, FILE_WRITE);
   if (myFile) {
-    myFile.close();
+    myFile.print(now.year());
+    myFile.print('/');
+    myFile.print(now.month());
+    myFile.print('/');
+    myFile.print(now.day());
+    myFile.print(' ');
+    myFile.print(now.hour());
+    myFile.print(':');
+    myFile.print(now.minute());
+    myFile.print(':');
+    myFile.print(now.second());
+    myFile.print(':');
+    myFile.flush();
   } else {
     // if the file didn't open, print an error:
     Serial.println("error opening file");
     abortLedWarning(500,250);
   }
-
+  attachInterrupt(digitalPinToInterrupt(interruptPin), ADXL_ISR, RISING);   // Attach Interrupt
+  
   delay(delayStart);
 }
 
 void loop(){
-  // Accelerometer Readings
   int x,y,z;
-  if (adxl.getFIFOStatus() > 31) {
-    for (int i=0; i<32; i++) {
-      adxl.readAccel(&x, &y, &z);         // Read the accelerometer values and store them in variables declared above x,y,z
-      readingEntry = micros();
-      readingEntry.concat(", ");
-      readingEntry.concat(x);
-      readingEntry.concat(", ");
-      readingEntry.concat(y);
-      readingEntry.concat(", ");
-      readingEntry.concat(z);
-      readingEntry.concat("\n");
-      
-      /********** SD CARD **********/
-      myFile = SD.open(fileNameChar, FILE_WRITE);
+  if (fifoFull) {
+    unsigned long currentMicros = micros(); 
+    int numEntries = adxl.getFIFOStatus();
+    /***** DEBUGGING checking data read rates
+    Serial.print(numEntries);
+    Serial.print(", ");
+    *****/
+    for (int i=0; i<numEntries; i++) {
+      adxl.readAccel(&x, &y, &z);
       if (myFile) {
-        myFile.print(readingEntry);
-        myFile.close();
+        myFile.print(currentMicros);
+        myFile.print(", ");
+        myFile.print(x);
+        myFile.print(", ");
+        myFile.print(y);
+        myFile.print(", ");
+        myFile.print(z);
+        myFile.print("\n");
+        myFile.flush();
       } else {
         // if the file didn't open, print an error:
         Serial.println("error opening file");
         abortLedWarning(500,250);
       }
     }
+    fifoFull = 0;
+    /***** DEBUGGING checking data read rates
+    currentMicrosTemp = micros();
+    Serial.print(1000000 / ((float)(currentMicrosTemp - previousMicros)/numEntries));
+    Serial.print(", ");
+    Serial.println(adxl.getFIFOStatus());
+    previousMicros = currentMicrosTemp;
+    *****/ 
   }
+}
+void ADXL_ISR() {
+  fifoFull = 1;
 }
