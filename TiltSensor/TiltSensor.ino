@@ -5,6 +5,7 @@
 #include <SdFat.h>
 #include <RTClib.h>
 #include <avr/pgmspace.h>
+#include <EEPROM.h>
 
 #define ADXL_POWERCTL_WAKEUP          0x0
 #define ADXL_POWERCTL_SLEEP           0x4
@@ -53,6 +54,26 @@ bool fifoFull = 1;
 String fileName;
 char fileNameChar[10];
 const int LED1pin = 9;
+
+struct eepromData {
+  char node[10];
+  int xOffset;
+  int yOffset;
+  int zOffset;
+  float xGain;
+  float yGain;
+  float zGain;  
+};
+eepromData accData;
+int xOffset = 0;
+int yOffset = 0;
+int zOffset = 0;
+float xGain = 0;
+float yGain = 0;
+float zGain = 0;
+int xAdj = 0;
+int yAdj = 0;
+int zAdj = 0;
 /********************* GLOBAL VARIABLES *********************/
 
 void setup(){
@@ -60,6 +81,21 @@ void setup(){
 
   pinMode(LED1pin, OUTPUT);
   digitalWrite(LED1pin, LOW);
+
+  EEPROM.get(0, accData);
+  xOffset = accData.xOffset;
+  yOffset = accData.yOffset;
+  zOffset = accData.zOffset;
+  xGain = accData.xGain;
+  yGain = accData.yGain;
+  zGain = accData.zGain;
+  /*
+  Serial.print(xOffset, DEC);
+  Serial.print(", ");
+  Serial.print(yOffset, DEC);
+  Serial.print(", ");
+  Serial.println(zOffset, DEC);
+  */
 
   ADXL345Setup();
 
@@ -109,20 +145,28 @@ void loop(){
     for (int i=0; i<numEntries; i++) {
       digitalWrite(LED1pin, HIGH);
       adxl.readAccel(&x, &y, &z);
-      myFile.print(currentMicros);
-      myFile.print(", ");
-      myFile.print(x);
-      myFile.print(", ");
-      myFile.print(y);
-      myFile.print(", ");
-      myFile.print(z);
-      myFile.print("\n");
-      myFile.flush();
+      xAdj = (float)(x - xOffset) / xGain;
+      yAdj = (float)(y - yOffset) / yGain;
+      zAdj = (float)(z - zOffset) / zGain;
+      //writeToFile(currentMicros, xAdj, yAdj, zAdj);
     }
     digitalWrite(LED1pin, LOW);
     fifoFull = 0; 
-    //readingsToSerial(micros(), x, y, z);
+    readingsToSerial(micros(), xAdj, yAdj, zAdj);
+    readingsToSerial(micros(), x, y, z);
   }
+}
+
+void writeToFile(unsigned long currentMicros, int x, int y, int z) {
+  myFile.print(currentMicros);
+  myFile.print(", ");
+  myFile.print(x);
+  myFile.print(", ");
+  myFile.print(y);
+  myFile.print(", ");
+  myFile.print(z);
+  myFile.print("\n");
+  myFile.flush();  
 }
 
 void abortLedWarning(int millisOn, int millisOff) {
@@ -139,6 +183,8 @@ void ADXL345Setup() {
   adxl.writeTo(ADXL345_BW_RATE, ADXL345_BW_12_5);
 
   adxl.writeTo(ADXL345_FIFO_CTL, ADXL345_FIFOMODE_FIFO);
+
+  //adxl.setAxisOffset(accData.xOffset, accData.yOffset, accData.zOffset);
   
   adxl.setInterruptMapping(1, 0);
   adxl.setInterrupt(1 ,1);
