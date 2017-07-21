@@ -6,6 +6,9 @@
 #include <RTClib.h>
 #include <avr/pgmspace.h>
 #include <EEPROM.h>
+#include "nRF24L01.h"
+#include "RF24.h"
+#include <DigitalIO.h>
 
 #define ADXL_POWERCTL_WAKEUP          0x0
 #define ADXL_POWERCTL_SLEEP           0x4
@@ -43,17 +46,20 @@ lblxOffset, lblyOffset, lblzOffset, lblxGain, lblyGain, lblzGain
 
 char lblBuffer[40];
 
+/***************** ARDUINO PIN CONFIGURATION ****************/
+const int interruptPin = 2;
+const int chipSelectSD = 4;
+const int chipSelectRadio = 5;
+const int csnRadio = 9;
+/***************** ARDUINO PIN CONFIGURATION ****************/
+
 /******************** CLASS CONSTRUCTORS ********************/
 SdFat SD;
 File myFile;
 RTC_DS1307 RTC;
 ADXL345 adxl = ADXL345();
+RF24 radio(chipSelectRadio, csnRadio);
 /******************** CLASS CONSTRUCTORS ********************/
-
-/***************** ARDUINO PIN CONFIGURATION ****************/
-int interruptPin = 2;
-const int chipSelectSD = 4;
-/***************** ARDUINO PIN CONFIGURATION ****************/
 
 /********************* GLOBAL VARIABLES *********************/
 const unsigned long delayStart = 1000;
@@ -81,6 +87,9 @@ float zGain = 0;
 int xAdj = 0;
 int yAdj = 0;
 int zAdj = 0;
+
+char SendPayLoad[32] = "";
+const uint64_t pipes[2] = { 0xF0F0F0F0E1LL,0xF0F0F0F0D2LL };
 /********************* GLOBAL VARIABLES *********************/
 
 void setup(){
@@ -110,6 +119,16 @@ void setup(){
 
   ADXL345ReadConfiguration();
 
+  //nRF24 configurations
+  radio.begin();
+  radio.setChannel(0x4c);
+  radio.setAutoAck(1);
+  radio.setRetries(15,15);
+  radio.setDataRate(RF24_250KBPS);
+  radio.setPayloadSize(32);
+  radio.openReadingPipe(1,pipes[0]);
+  radio.openWritingPipe(pipes[1]);
+
   delay(delayStart);
   
   adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);
@@ -132,6 +151,10 @@ void loop(){
     fifoFull = 0; 
     //readingsToSerial(micros(), xAdj, yAdj, zAdj);
     //readingsToSerial(micros(), x, y, z);
+
+    
+    strcpy(SendPayLoad, "Ang baho mo");
+    bool ok = radio.write(&SendPayLoad,strlen(SendPayLoad));
   }
 }
 
@@ -148,12 +171,13 @@ void writeToFile(unsigned long currentMicros, int x, int y, int z) {
 }
 
 void abortLedWarning(int millisOn, int millisOff) {
-  while(1) {
+  /*while(1) {
     digitalWrite(LED_BUILTIN, HIGH);   // turn the LED on (HIGH is the voltage level)
     delay(millisOn);                       // wait for a second
     digitalWrite(LED_BUILTIN, LOW);    // turn the LED off by making the voltage LOW
     delay(millisOff);   
   } 
+  */
 }
 
 void ADXL345Setup() {
