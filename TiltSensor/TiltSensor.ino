@@ -28,10 +28,17 @@ const char lblINTSOURCE[] PROGMEM = "Source of Interrupts              :";
 const char lblDATAFORMAT[] PROGMEM = "Data Format                       :";
 const char lblFIFOCTL[] PROGMEM = "FIFO Control                      :";
 const char lblFIFOSTATUS[] PROGMEM = "FIFO Status                       :";
+const char lblxOffset[] PROGMEM = "Manual X-Axis Offset              :";
+const char lblyOffset[] PROGMEM = "Manual Y-Axis Offset              :";
+const char lblzOffset[] PROGMEM = "Manual Z-Axis Offset              :";
+const char lblxGain[] PROGMEM = "Manual X-Axis Gain                :";
+const char lblyGain[] PROGMEM = "Manual Y-Axis Gain                :";
+const char lblzGain[] PROGMEM = "Manual Z-Axis Gain                :";
 
 const char* const string_table[] PROGMEM = {lblDEVID, lblOFSX,
 lblOFSY, lblOFSZ, lblBWRATE, lblPOWERCTL, lblINTENABLE,
-lblINTMAP, lblINTSOURCE, lblDATAFORMAT, lblFIFOCTL, lblFIFOSTATUS
+lblINTMAP, lblINTSOURCE, lblDATAFORMAT, lblFIFOCTL, lblFIFOSTATUS,
+lblxOffset, lblyOffset, lblzOffset, lblxGain, lblyGain, lblzGain
 };
 
 char lblBuffer[40];
@@ -50,13 +57,13 @@ const int chipSelectSD = 4;
 
 /********************* GLOBAL VARIABLES *********************/
 const unsigned long delayStart = 1000;
-bool fifoFull = 1;
+volatile bool fifoFull = 1;
 String fileName;
 char fileNameChar[10];
 const int LED1pin = 9;
 
 struct eepromData {
-  char node[10];
+  char node[16];
   int xOffset;
   int yOffset;
   int zOffset;
@@ -77,7 +84,7 @@ int zAdj = 0;
 /********************* GLOBAL VARIABLES *********************/
 
 void setup(){
-  Serial.begin(250000);
+  Serial.begin(9600);
 
   pinMode(LED1pin, OUTPUT);
   digitalWrite(LED1pin, LOW);
@@ -89,14 +96,7 @@ void setup(){
   xGain = accData.xGain;
   yGain = accData.yGain;
   zGain = accData.zGain;
-  /*
-  Serial.print(xOffset, DEC);
-  Serial.print(", ");
-  Serial.print(yOffset, DEC);
-  Serial.print(", ");
-  Serial.println(zOffset, DEC);
-  */
-
+  
   ADXL345Setup();
 
   SDModuleSetup(chipSelectSD);
@@ -104,30 +104,8 @@ void setup(){
   RTC.begin();
   DateTime now = RTC.now();
   
-  long timeSince = (long) now.hour() * 3600 + (long) now.minute() * 60 + (long) now.second();
-  fileName = String(timeSince, DEC);
-  fileName.trim();
-  fileName.concat(".TXT");
-  fileName.toCharArray(fileNameChar, fileName.length()+1);
-  myFile = SD.open(fileNameChar, FILE_WRITE);
-  if (myFile) {
-    myFile.print(now.year());
-    myFile.print('/');
-    myFile.print(now.month());
-    myFile.print('/');
-    myFile.print(now.day());
-    myFile.print(' ');
-    myFile.print(now.hour());
-    myFile.print(':');
-    myFile.print(now.minute());
-    myFile.print(':');
-    myFile.println(now.second());
-    myFile.flush();
-  } else {
-    // if the file didn't open, print an error:
-    Serial.println("error opening file");
-    abortLedWarning(0,250);
-  }
+  FileSetup(now);
+  
   attachInterrupt(digitalPinToInterrupt(interruptPin), ADXL_ISR, RISING);
 
   ADXL345ReadConfiguration();
@@ -148,12 +126,12 @@ void loop(){
       xAdj = (float)(x - xOffset) / xGain;
       yAdj = (float)(y - yOffset) / yGain;
       zAdj = (float)(z - zOffset) / zGain;
-      //writeToFile(currentMicros, xAdj, yAdj, zAdj);
+      writeToFile(currentMicros, xAdj, yAdj, zAdj);
     }
     digitalWrite(LED1pin, LOW);
     fifoFull = 0; 
-    readingsToSerial(micros(), xAdj, yAdj, zAdj);
-    readingsToSerial(micros(), x, y, z);
+    //readingsToSerial(micros(), xAdj, yAdj, zAdj);
+    //readingsToSerial(micros(), x, y, z);
   }
 }
 
@@ -234,6 +212,33 @@ void SDModuleSetup(int SDpin) {
   }
 }
 
+void FileSetup(DateTime now) {
+  long timeSince = (long) now.hour() * 3600 + (long) now.minute() * 60 + (long) now.second();
+  fileName = String(timeSince, DEC);
+  fileName.trim();
+  fileName.concat(".TXT");
+  fileName.toCharArray(fileNameChar, fileName.length()+1);
+  myFile = SD.open(fileNameChar, FILE_WRITE);
+  if (myFile) {
+    myFile.print(now.year());
+    myFile.print('/');
+    myFile.print(now.month());
+    myFile.print('/');
+    myFile.print(now.day());
+    myFile.print(' ');
+    myFile.print(now.hour());
+    myFile.print(':');
+    myFile.print(now.minute());
+    myFile.print(':');
+    myFile.println(now.second());
+    myFile.flush();
+  } else {
+    // if the file didn't open, print an error:
+    Serial.println("error opening file");
+    abortLedWarning(0,250);
+  }  
+}
+
 void readingsToSerial(unsigned long readingMillis, int x, int y, int z) {
   Serial.print(readingMillis);
   Serial.print(", ");
@@ -256,9 +261,6 @@ void writeToOutputFile(String parameter, int address) {
   myFile.print(parameter);
   myFile.println(value, HEX);
   myFile.flush();
-  //Serial for debugging only
-  //Serial.print(parameter);
-  //Serial.println(value, HEX);
 }
 
 void ADXL345ReadConfiguration() {
@@ -286,4 +288,16 @@ void ADXL345ReadConfiguration() {
   writeToOutputFile(lblBuffer, ADXL345_FIFO_CTL);
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[11])));
   writeToOutputFile(lblBuffer, ADXL345_FIFO_STATUS);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[12])));
+  writeToOutputFile(lblBuffer, xOffset);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[13])));
+  writeToOutputFile(lblBuffer, yOffset);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[14])));
+  writeToOutputFile(lblBuffer, zOffset);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[15])));
+  writeToOutputFile(lblBuffer, xGain);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[16])));
+  writeToOutputFile(lblBuffer, yGain);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[17])));
+  writeToOutputFile(lblBuffer, zGain);
 }
