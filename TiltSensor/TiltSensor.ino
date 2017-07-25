@@ -50,7 +50,10 @@ char lblBuffer[40];
 const int interruptPin = 2;
 const int chipSelectSD = 4;
 const int chipSelectRadio = 5;
+const int LED1pin = 16;
 const int csnRadio = 9;
+const int modePin = 15;
+const int buzzerPin = 17;
 /***************** ARDUINO PIN CONFIGURATION ****************/
 
 /******************** CLASS CONSTRUCTORS ********************/
@@ -66,7 +69,6 @@ const unsigned long delayStart = 1000;
 volatile bool fifoFull = 1;
 String fileName;
 char fileNameChar[10];
-const int LED1pin = 9;
 
 struct eepromData {
   char node[16];
@@ -90,94 +92,119 @@ int zAdj = 0;
 
 char SendPayLoad[32] = "";
 const uint64_t pipes[2] = { 0xF0F0F0F0E1LL,0xF0F0F0F0D2LL };
+
+bool MODE = 0;
 /********************* GLOBAL VARIABLES *********************/
 
 void setup(){
   Serial.begin(9600);
 
-  pinMode(LED1pin, OUTPUT);
-  digitalWrite(LED1pin, LOW);
+  pinMode(modePin, INPUT_PULLUP);
+  MODE = digitalRead(modePin);
 
-  EEPROM.get(0, accData);
-  xOffset = accData.xOffset;
-  yOffset = accData.yOffset;
-  zOffset = accData.zOffset;
-  xGain = accData.xGain;
-  yGain = accData.yGain;
-  zGain = accData.zGain;
-  
-  ADXL345Setup();
+  pinMode(buzzerPin, OUTPUT);
 
-  SDModuleSetup(chipSelectSD);
-  
-  RTC.begin();
-  DateTime now = RTC.now();
-  
-  FileSetup(now);
-  
-  attachInterrupt(digitalPinToInterrupt(interruptPin), ADXL_ISR, RISING);
-
-  ADXL345ReadConfiguration();
-
-  //nRF24 configurations
-  radio.begin();
-  radio.setChannel(0x4c);
-  radio.setAutoAck(1);
-  radio.setRetries(15,15);
-  radio.setDataRate(RF24_250KBPS);
-  radio.setPayloadSize(32);
-  radio.openReadingPipe(1,pipes[0]);
-  radio.openWritingPipe(pipes[1]);
-
-  delay(delayStart);
-  
-  adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);
-}
-
-void loop(){
-  int x,y,z;
-  if (fifoFull) {
-    unsigned long currentMicros = micros(); 
-    int numEntries = adxl.getFIFOStatus();
-    for (int i=0; i<numEntries; i++) {
-      digitalWrite(LED1pin, HIGH);
-      adxl.readAccel(&x, &y, &z);
-      xAdj = (float)(x - xOffset) / xGain;
-      yAdj = (float)(y - yOffset) / yGain;
-      zAdj = (float)(z - zOffset) / zGain;
-      writeToFile(currentMicros, xAdj, yAdj, zAdj);
-    }
+  if(MODE == 0) {
+    pinMode(LED1pin, OUTPUT);
     digitalWrite(LED1pin, LOW);
-    fifoFull = 0; 
-    //readingsToSerial(micros(), xAdj, yAdj, zAdj);
-    //readingsToSerial(micros(), x, y, z);
-
-    
-    strcpy(SendPayLoad, "Ang baho mo");
-    bool ok = radio.write(&SendPayLoad,strlen(SendPayLoad));
+    getEEPROMdata();    
+    ADXL345Setup();
+    SDModuleSetup(chipSelectSD);
+    RTC.begin();
+    DateTime now = RTC.now();
+    fileSetup(now);
+    attachInterrupt(digitalPinToInterrupt(interruptPin), ADXL_ISR, RISING);
+    ADXL345ReadConfiguration();
+    delay(delayStart);
+    adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);
+  } else {
+    radioSetup();
   }
 }
 
-void writeToFile(unsigned long currentMicros, int x, int y, int z) {
-  myFile.print(currentMicros);
-  myFile.print(", ");
-  myFile.print(x);
-  myFile.print(", ");
-  myFile.print(y);
-  myFile.print(", ");
-  myFile.print(z);
-  myFile.print("\n");
-  myFile.flush();  
+void loop(){
+  if(MODE == 0) {
+    while(1) {
+      int x,y,z;
+      if (fifoFull) {
+        unsigned long currentMicros = micros(); 
+        int numEntries = adxl.getFIFOStatus();
+        for (int i=0; i<numEntries; i++) {
+          digitalWrite(LED1pin, HIGH);
+          adxl.readAccel(&x, &y, &z);
+          xAdj = (float)(x - xOffset) / xGain;
+          yAdj = (float)(y - yOffset) / yGain;
+          zAdj = (float)(z - zOffset) / zGain;
+          writeToFile(currentMicros, xAdj, yAdj, zAdj);
+        }
+        digitalWrite(LED1pin, LOW);
+        fifoFull = 0; 
+        //readingsToSerial(micros(), xAdj, yAdj, zAdj);
+        //readingsToSerial(micros(), x, y, z);
+      }
+    }
+  } else {
+    while(1) {
+      strcpy(SendPayLoad, "Ang baho mo");
+      bool ok = radio.write(&SendPayLoad,strlen(SendPayLoad));  
+    }
+  }
 }
 
-void abortLedWarning(int millisOn, int millisOff) {
-  /*while(1) {
-    digitalWrite(LED_BUILTIN, HIGH);   // turn the LED on (HIGH is the voltage level)
-    delay(millisOn);                       // wait for a second
-    digitalWrite(LED_BUILTIN, LOW);    // turn the LED off by making the voltage LOW
-    delay(millisOff);   
+void abortWarning(int millisOn, int millisOff) {
+  while(1) {
+    Piezometer(buzzerPin, 500, 255); 
   } 
-  */
+}
+
+void Piezometer(int _piezoPin, unsigned long period, int dutyCycle) {
+  analogWrite(_piezoPin, dutyCycle);
+  delay(period);
+  digitalWrite(_piezoPin, LOW);
+  delay(period);
+}
+
+void ADXL_ISR() {
+  fifoFull = 1;
+}
+
+void ADXL345ReadConfiguration() {
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[0])));
+  writeToFile(lblBuffer, ADXL345_DEVID);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[1])));
+  writeToFile(lblBuffer, ADXL345_OFSX);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[2])));
+  writeToFile(lblBuffer, ADXL345_OFSY);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[3])));
+  writeToFile(lblBuffer, ADXL345_OFSZ);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[4])));
+  writeToFile(lblBuffer, ADXL345_BW_RATE);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[5])));
+  writeToFile(lblBuffer, ADXL345_POWER_CTL);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[6])));
+  writeToFile(lblBuffer, ADXL345_INT_ENABLE);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[7])));
+  writeToFile(lblBuffer, ADXL345_INT_MAP);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[8])));
+  writeToFile(lblBuffer, ADXL345_INT_SOURCE);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[9])));
+  writeToFile(lblBuffer, ADXL345_DATA_FORMAT);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[10])));
+  writeToFile(lblBuffer, ADXL345_FIFO_CTL);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[11])));
+  writeToFile(lblBuffer, ADXL345_FIFO_STATUS);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[12])));
+  writeToFile(lblBuffer, xOffset);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[13])));
+  writeToFile(lblBuffer, yOffset);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[14])));
+  writeToFile(lblBuffer, zOffset);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[15])));
+  writeToFile(lblBuffer, xGain);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[16])));
+  writeToFile(lblBuffer, yGain);
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[17])));
+  writeToFile(lblBuffer, zGain);
 }
 
 void ADXL345Setup() {
@@ -191,19 +218,30 @@ void ADXL345Setup() {
   adxl.setInterruptMapping(1, 0);
   adxl.setInterrupt(1 ,1);
 
-  adxl.setRangeSetting(2);            // Give the range settings
-                                      // Accepted values are 2g, 4g, 8g or 16g
-                                      // Higher Values = Wider Measurement Range
-                                      // Lower Values = Greater Sensitivity
-   
-  adxl.setActivityXYZ(0, 0, 0);       // Set to activate movement detection in the axes "adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
-  adxl.setActivityThreshold(75);      // 62.5mg per increment   // Set activity   // Inactivity thresholds (0-255)
- 
-  adxl.setInactivityXYZ(0, 0, 0);     // Set to detect inactivity in all the axes "adxl.setInactivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
-  adxl.setInactivityThreshold(75);    // 62.5mg per increment   // Set inactivity // Inactivity thresholds (0-255)
+  // Give the range settings
+  // Accepted values are 2g, 4g, 8g or 16g
+  // Higher Values = Wider Measurement Range
+  // Lower Values = Greater Sensitivity
+  adxl.setRangeSetting(2);
+
+  // Set to activate movement detection in the axes 
+  //"adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
+  adxl.setActivityXYZ(0, 0, 0);
+
+  // Set activity   // Inactivity thresholds (0-255)
+  adxl.setActivityThreshold(75); // 62.5mg per increment   
+
+  // Set to detect inactivity in all the axes 
+  //"adxl.setInactivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
+  adxl.setInactivityXYZ(0, 0, 0);     
+
+  // Set inactivity // Inactivity thresholds (0-255)
+  adxl.setInactivityThreshold(75);    // 62.5mg per increment   
   adxl.setTimeInactivity(10);         // How many seconds of no activity is inactive?
 
-  adxl.setTapDetectionOnXYZ(0, 0, 0); // Detect taps in the directions turned ON "adxl.setTapDetectionOnX(X, Y, Z);" (1 == ON, 0 == OFF)
+  // Detect taps in the directions turned ON
+  //"adxl.setTapDetectionOnX(X, Y, Z);" (1 == ON, 0 == OFF)
+  adxl.setTapDetectionOnXYZ(0, 0, 0); 
  
   // Set values for what is considered a TAP and what is a DOUBLE TAP (0-255)
   adxl.setTapThreshold(50);           // 62.5 mg per increment
@@ -224,21 +262,9 @@ void ADXL345Setup() {
 
 }
 
-void SDModuleSetup(int SDpin) {
-  //Initialize SD card
-  Serial.print("Initializing SD card...");
-
-  if (!SD.begin(SDpin)) {
-    Serial.println("initialization failed!");
-    abortLedWarning(0,500); 
-  } else {
-    Serial.println("initialization done.");
-  }
-}
-
-void FileSetup(DateTime now) {
-  long timeSince = (long) now.hour() * 3600 + (long) now.minute() * 60 + (long) now.second();
-  fileName = String(timeSince, DEC);
+void fileSetup(DateTime now) {
+  long timeSince = (long) now.month() * 2592000 + (long) now.day() * 86400 + (long) now.hour() * 3600 + (long) now.minute() * 60 + (long) now.second();
+  fileName = String(timeSince, HEX);
   fileName.trim();
   fileName.concat(".TXT");
   fileName.toCharArray(fileNameChar, fileName.length()+1);
@@ -259,8 +285,29 @@ void FileSetup(DateTime now) {
   } else {
     // if the file didn't open, print an error:
     Serial.println("error opening file");
-    abortLedWarning(0,250);
+    abortWarning(1000,1000);
   }  
+}
+
+void getEEPROMdata() {
+  EEPROM.get(0, accData);
+  xOffset = accData.xOffset;
+  yOffset = accData.yOffset;
+  zOffset = accData.zOffset;
+  xGain = accData.xGain;
+  yGain = accData.yGain;
+  zGain = accData.zGain;  
+}
+
+void radioSetup() {
+  radio.begin();
+  radio.setChannel(0x4c);
+  radio.setAutoAck(1);
+  radio.setRetries(15,15);
+  radio.setDataRate(RF24_250KBPS);
+  radio.setPayloadSize(32);
+  radio.openReadingPipe(1,pipes[0]);
+  radio.openWritingPipe(pipes[1]);  
 }
 
 void readingsToSerial(unsigned long readingMillis, int x, int y, int z) {
@@ -274,54 +321,35 @@ void readingsToSerial(unsigned long readingMillis, int x, int y, int z) {
   Serial.println();
 }
 
-void ADXL_ISR() {
-  fifoFull = 1;
+void SDModuleSetup(int SDpin) {
+  //Initialize SD card
+  Serial.print("Initializing SD card...");
+
+  if (!SD.begin(SDpin)) {
+    Serial.println("initialization failed!");
+    abortWarning(1000,1000); 
+  } else {
+    Serial.println("initialization done.");
+  }
 }
 
-void writeToOutputFile(String parameter, int address) {
+void writeToFile(unsigned long currentMicros, int x, int y, int z) {
+  myFile.print(currentMicros);
+  myFile.print(", ");
+  myFile.print(x);
+  myFile.print(", ");
+  myFile.print(y);
+  myFile.print(", ");
+  myFile.print(z);
+  myFile.print("\n");
+  myFile.flush();  
+}
+
+void writeToFile(String parameter, int address) {
   byte value;
   adxl.readFrom(address, 1, &value);
   //write to output file
   myFile.print(parameter);
   myFile.println(value, HEX);
   myFile.flush();
-}
-
-void ADXL345ReadConfiguration() {
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[0])));
-  writeToOutputFile(lblBuffer, ADXL345_DEVID);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[1])));
-  writeToOutputFile(lblBuffer, ADXL345_OFSX);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[2])));
-  writeToOutputFile(lblBuffer, ADXL345_OFSY);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[3])));
-  writeToOutputFile(lblBuffer, ADXL345_OFSZ);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[4])));
-  writeToOutputFile(lblBuffer, ADXL345_BW_RATE);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[5])));
-  writeToOutputFile(lblBuffer, ADXL345_POWER_CTL);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[6])));
-  writeToOutputFile(lblBuffer, ADXL345_INT_ENABLE);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[7])));
-  writeToOutputFile(lblBuffer, ADXL345_INT_MAP);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[8])));
-  writeToOutputFile(lblBuffer, ADXL345_INT_SOURCE);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[9])));
-  writeToOutputFile(lblBuffer, ADXL345_DATA_FORMAT);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[10])));
-  writeToOutputFile(lblBuffer, ADXL345_FIFO_CTL);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[11])));
-  writeToOutputFile(lblBuffer, ADXL345_FIFO_STATUS);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[12])));
-  writeToOutputFile(lblBuffer, xOffset);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[13])));
-  writeToOutputFile(lblBuffer, yOffset);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[14])));
-  writeToOutputFile(lblBuffer, zOffset);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[15])));
-  writeToOutputFile(lblBuffer, xGain);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[16])));
-  writeToOutputFile(lblBuffer, yGain);
-  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[17])));
-  writeToOutputFile(lblBuffer, zGain);
 }
