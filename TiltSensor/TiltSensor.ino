@@ -6,9 +6,6 @@
 #include <RTClib.h>
 #include <avr/pgmspace.h>
 #include <EEPROM.h>
-#include "nRF24L01.h"
-#include "RF24.h"
-#include <DigitalIO.h>
 
 #define ADXL_POWERCTL_WAKEUP          0x0
 #define ADXL_POWERCTL_SLEEP           0x4
@@ -37,11 +34,13 @@ const char lblzOffset[] PROGMEM = "Manual Z-Axis Offset              :";
 const char lblxGain[] PROGMEM = "Manual X-Axis Gain                :";
 const char lblyGain[] PROGMEM = "Manual Y-Axis Gain                :";
 const char lblzGain[] PROGMEM = "Manual Z-Axis Gain                :";
+const char lblNode[] PROGMEM = "Node                              :";
 
 const char* const string_table[] PROGMEM = {lblDEVID, lblOFSX,
 lblOFSY, lblOFSZ, lblBWRATE, lblPOWERCTL, lblINTENABLE,
 lblINTMAP, lblINTSOURCE, lblDATAFORMAT, lblFIFOCTL, lblFIFOSTATUS,
-lblxOffset, lblyOffset, lblzOffset, lblxGain, lblyGain, lblzGain
+lblxOffset, lblyOffset, lblzOffset, lblxGain, lblyGain, lblzGain,
+lblNode
 };
 
 char lblBuffer[40];
@@ -49,9 +48,7 @@ char lblBuffer[40];
 /***************** ARDUINO PIN CONFIGURATION ****************/
 const int interruptPin = 2;
 const int chipSelectSD = 4;
-const int chipSelectRadio = 5;
 const int LED1pin = 16;
-const int csnRadio = 9;
 const int modePin = 15;
 const int buzzerPin = 17;
 /***************** ARDUINO PIN CONFIGURATION ****************/
@@ -61,7 +58,6 @@ SdFat SD;
 File myFile;
 RTC_DS1307 RTC;
 ADXL345 adxl = ADXL345();
-RF24 radio(chipSelectRadio, csnRadio);
 /******************** CLASS CONSTRUCTORS ********************/
 
 /********************* GLOBAL VARIABLES *********************/
@@ -80,6 +76,7 @@ struct eepromData {
   float zGain;  
 };
 eepromData accData;
+String node;
 int xOffset = 0;
 int yOffset = 0;
 int zOffset = 0;
@@ -89,65 +86,41 @@ float zGain = 0;
 int xAdj = 0;
 int yAdj = 0;
 int zAdj = 0;
-
-char SendPayLoad[32] = "";
-const uint64_t pipes[2] = { 0xF0F0F0F0E1LL,0xF0F0F0F0D2LL };
-
-bool MODE = 0;
 /********************* GLOBAL VARIABLES *********************/
 
 void setup(){
   Serial.begin(9600);
-
-  pinMode(modePin, INPUT_PULLUP);
-  MODE = digitalRead(modePin);
-
-  pinMode(buzzerPin, OUTPUT);
-
-  if(MODE == 0) {
-    pinMode(LED1pin, OUTPUT);
-    digitalWrite(LED1pin, LOW);
-    getEEPROMdata();    
-    ADXL345Setup();
-    SDModuleSetup(chipSelectSD);
-    RTC.begin();
-    DateTime now = RTC.now();
-    fileSetup(now);
-    attachInterrupt(digitalPinToInterrupt(interruptPin), ADXL_ISR, RISING);
-    ADXL345ReadConfiguration();
-    delay(delayStart);
-    adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);
-  } else {
-    radioSetup();
-  }
+  pinMode(LED1pin, OUTPUT);
+  digitalWrite(LED1pin, LOW);
+  getEEPROMdata();    
+  ADXL345Setup();
+  SDModuleSetup(chipSelectSD);
+  RTC.begin();
+  DateTime now = RTC.now();
+  fileSetup(now);
+  attachInterrupt(digitalPinToInterrupt(interruptPin), ADXL_ISR, RISING);
+  ADXL345ReadConfiguration();
+  delay(delayStart);
+  adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);
 }
 
 void loop(){
-  if(MODE == 0) {
-    while(1) {
-      int x,y,z;
-      if (fifoFull) {
-        unsigned long currentMicros = micros(); 
-        int numEntries = adxl.getFIFOStatus();
-        for (int i=0; i<numEntries; i++) {
-          digitalWrite(LED1pin, HIGH);
-          adxl.readAccel(&x, &y, &z);
-          xAdj = (float)(x - xOffset) / xGain;
-          yAdj = (float)(y - yOffset) / yGain;
-          zAdj = (float)(z - zOffset) / zGain;
-          writeToFile(currentMicros, xAdj, yAdj, zAdj);
-        }
-        digitalWrite(LED1pin, LOW);
-        fifoFull = 0; 
-        //readingsToSerial(micros(), xAdj, yAdj, zAdj);
-        //readingsToSerial(micros(), x, y, z);
-      }
+  if (fifoFull) {
+    int x,y,z;
+    unsigned long currentMicros = micros(); 
+    int numEntries = adxl.getFIFOStatus();
+    for (int i=0; i<numEntries; i++) {
+      digitalWrite(LED1pin, HIGH);
+      adxl.readAccel(&x, &y, &z);
+      xAdj = (float)(x - xOffset) / xGain;
+      yAdj = (float)(y - yOffset) / yGain;
+      zAdj = (float)(z - zOffset) / zGain;
+      writeToFile(currentMicros, xAdj, yAdj, zAdj);
     }
-  } else {
-    while(1) {
-      strcpy(SendPayLoad, "Ang baho mo");
-      bool ok = radio.write(&SendPayLoad,strlen(SendPayLoad));  
-    }
+    digitalWrite(LED1pin, LOW);
+    fifoFull = 0; 
+    //readingsToSerial(micros(), xAdj, yAdj, zAdj);
+    //readingsToSerial(micros(), x, y, z);
   }
 }
 
@@ -157,54 +130,49 @@ void abortWarning(int millisOn, int millisOff) {
   } 
 }
 
-void Piezometer(int _piezoPin, unsigned long period, int dutyCycle) {
-  analogWrite(_piezoPin, dutyCycle);
-  delay(period);
-  digitalWrite(_piezoPin, LOW);
-  delay(period);
-}
-
 void ADXL_ISR() {
   fifoFull = 1;
 }
 
 void ADXL345ReadConfiguration() {
+  strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[18])));
+  writeToFile(lblBuffer, node);
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[0])));
-  writeToFile(lblBuffer, ADXL345_DEVID);
+  writeToFile(lblBuffer, ADXL345_DEVID, "HEX");
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[1])));
-  writeToFile(lblBuffer, ADXL345_OFSX);
+  writeToFile(lblBuffer, ADXL345_OFSX, "HEX");
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[2])));
-  writeToFile(lblBuffer, ADXL345_OFSY);
+  writeToFile(lblBuffer, ADXL345_OFSY, "HEX");
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[3])));
-  writeToFile(lblBuffer, ADXL345_OFSZ);
+  writeToFile(lblBuffer, ADXL345_OFSZ, "HEX");
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[4])));
-  writeToFile(lblBuffer, ADXL345_BW_RATE);
+  writeToFile(lblBuffer, ADXL345_BW_RATE, "HEX");
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[5])));
-  writeToFile(lblBuffer, ADXL345_POWER_CTL);
+  writeToFile(lblBuffer, ADXL345_POWER_CTL, "HEX");
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[6])));
-  writeToFile(lblBuffer, ADXL345_INT_ENABLE);
+  writeToFile(lblBuffer, ADXL345_INT_ENABLE, "HEX");
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[7])));
-  writeToFile(lblBuffer, ADXL345_INT_MAP);
+  writeToFile(lblBuffer, ADXL345_INT_MAP, "HEX");
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[8])));
-  writeToFile(lblBuffer, ADXL345_INT_SOURCE);
+  writeToFile(lblBuffer, ADXL345_INT_SOURCE, "HEX");
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[9])));
-  writeToFile(lblBuffer, ADXL345_DATA_FORMAT);
+  writeToFile(lblBuffer, ADXL345_DATA_FORMAT, "HEX");
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[10])));
-  writeToFile(lblBuffer, ADXL345_FIFO_CTL);
+  writeToFile(lblBuffer, ADXL345_FIFO_CTL, "HEX");
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[11])));
-  writeToFile(lblBuffer, ADXL345_FIFO_STATUS);
+  writeToFile(lblBuffer, ADXL345_FIFO_STATUS, "HEX");
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[12])));
-  writeToFile(lblBuffer, xOffset);
+  writeToFile(lblBuffer, (String)xOffset);
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[13])));
-  writeToFile(lblBuffer, yOffset);
+  writeToFile(lblBuffer, (String)yOffset);
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[14])));
-  writeToFile(lblBuffer, zOffset);
+  writeToFile(lblBuffer, (String)zOffset);
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[15])));
-  writeToFile(lblBuffer, xGain);
+  writeToFile(lblBuffer, (String)xGain);
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[16])));
-  writeToFile(lblBuffer, yGain);
+  writeToFile(lblBuffer, (String)yGain);
   strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[17])));
-  writeToFile(lblBuffer, zGain);
+  writeToFile(lblBuffer, (String)zGain);
 }
 
 void ADXL345Setup() {
@@ -263,7 +231,8 @@ void ADXL345Setup() {
 }
 
 void fileSetup(DateTime now) {
-  long timeSince = (long) now.month() * 2592000 + (long) now.day() * 86400 + (long) now.hour() * 3600 + (long) now.minute() * 60 + (long) now.second();
+  long timeSince = (long) now.month() * 2592000 + (long) now.day() * 86400 + 
+      (long) now.hour() * 3600 + (long) now.minute() * 60 + (long) now.second();
   fileName = String(timeSince, HEX);
   fileName.trim();
   fileName.concat(".TXT");
@@ -291,6 +260,7 @@ void fileSetup(DateTime now) {
 
 void getEEPROMdata() {
   EEPROM.get(0, accData);
+  node = accData.node;
   xOffset = accData.xOffset;
   yOffset = accData.yOffset;
   zOffset = accData.zOffset;
@@ -299,15 +269,11 @@ void getEEPROMdata() {
   zGain = accData.zGain;  
 }
 
-void radioSetup() {
-  radio.begin();
-  radio.setChannel(0x4c);
-  radio.setAutoAck(1);
-  radio.setRetries(15,15);
-  radio.setDataRate(RF24_250KBPS);
-  radio.setPayloadSize(32);
-  radio.openReadingPipe(1,pipes[0]);
-  radio.openWritingPipe(pipes[1]);  
+void Piezometer(int _piezoPin, unsigned long period, int dutyCycle) {
+  analogWrite(_piezoPin, dutyCycle);
+  delay(period);
+  digitalWrite(_piezoPin, LOW);
+  delay(period);
 }
 
 void readingsToSerial(unsigned long readingMillis, int x, int y, int z) {
@@ -334,7 +300,7 @@ void SDModuleSetup(int SDpin) {
 }
 
 void writeToFile(unsigned long currentMicros, int x, int y, int z) {
-  myFile.print(currentMicros);
+  myFile.print(currentMicros, HEX);
   myFile.print(", ");
   myFile.print(x);
   myFile.print(", ");
@@ -345,11 +311,21 @@ void writeToFile(unsigned long currentMicros, int x, int y, int z) {
   myFile.flush();  
 }
 
-void writeToFile(String parameter, int address) {
+void writeToFile(String parameter, int address, String outputDataType) {
   byte value;
   adxl.readFrom(address, 1, &value);
-  //write to output file
   myFile.print(parameter);
-  myFile.println(value, HEX);
+  if (outputDataType == "HEX") {
+    myFile.print("0x");
+    myFile.println(value, HEX);
+  } else if(outputDataType == "DEC") {
+    myFile.println(value, DEC);
+  }
+  myFile.flush();
+}
+
+void writeToFile(String parameter, String value) {
+  myFile.print(parameter);
+  myFile.println(value);
   myFile.flush();
 }
