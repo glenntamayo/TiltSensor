@@ -86,6 +86,9 @@ float zGain = 0;
 int xAdj = 0;
 int yAdj = 0;
 int zAdj = 0;
+
+unsigned long previousSdFlushMicros = 0;
+const unsigned long SdFlushInterval = 5000000;
 /********************* GLOBAL VARIABLES *********************/
 
 void setup(){
@@ -105,22 +108,26 @@ void setup(){
 }
 
 void loop(){
+  unsigned long currentMicros = micros();
   if (fifoFull) {
     int x,y,z;
-    unsigned long currentMicros = micros(); 
-    int numEntries = adxl.getFIFOStatus();
-    for (int i=0; i<numEntries; i++) {
-      digitalWrite(LED1pin, HIGH);
+    for (int i=0; i<31; i++) {
       adxl.readAccel(&x, &y, &z);
       xAdj = (float)(x - xOffset) / xGain;
       yAdj = (float)(y - yOffset) / yGain;
       zAdj = (float)(z - zOffset) / zGain;
       writeToFile(currentMicros, xAdj, yAdj, zAdj);
     }
-    digitalWrite(LED1pin, LOW);
     fifoFull = 0; 
     //readingsToSerial(micros(), xAdj, yAdj, zAdj);
     //readingsToSerial(micros(), x, y, z);
+  }
+  
+  if(currentMicros - previousSdFlushMicros > SdFlushInterval) {
+    digitalWrite(LED1pin, HIGH);
+    myFile.flush();
+    digitalWrite(LED1pin, LOW);
+    previousSdFlushMicros = currentMicros;
   }
 }
 
@@ -177,7 +184,7 @@ void ADXL345ReadConfiguration() {
 
 void ADXL345Setup() {
   
-  adxl.writeTo(ADXL345_BW_RATE, ADXL345_BW_12_5);
+  adxl.writeTo(ADXL345_BW_RATE, ADXL345_BW_50);
 
   adxl.writeTo(ADXL345_FIFO_CTL, ADXL345_FIFOMODE_FIFO);
 
@@ -300,7 +307,7 @@ void SDModuleSetup(int SDpin) {
 }
 
 void writeToFile(unsigned long currentMicros, int x, int y, int z) {
-  myFile.print(currentMicros, HEX);
+  myFile.print(currentMicros);
   myFile.print(", ");
   myFile.print(x);
   myFile.print(", ");
@@ -308,7 +315,6 @@ void writeToFile(unsigned long currentMicros, int x, int y, int z) {
   myFile.print(", ");
   myFile.print(z);
   myFile.print("\n");
-  myFile.flush();  
 }
 
 void writeToFile(String parameter, int address, String outputDataType) {
