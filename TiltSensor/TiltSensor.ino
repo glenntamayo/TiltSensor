@@ -8,6 +8,14 @@
 #include <EEPROM.h>
 #include <SoftwareSerial.h>
 
+//MODE 0 - PRODUCTION
+//MODE 1 - ACCELEROMETER
+//MODE 2 - ACCELEROMETER + RTC
+//MODE 3 - ACCELEROMETER + RTC + SD
+//MODE 4 - ACCELEROMETER + RTC + SD + HC05
+//MODE 10 - ACCELEROMETER + HC05
+int MODE = 0;
+
 #define ADXL_POWERCTL_WAKEUP          0x0
 #define ADXL_POWERCTL_SLEEP           0x4
 #define ADXL_POWERCTL_MEASURE         0x8
@@ -93,51 +101,91 @@ int zAdj = 0;
 
 unsigned long previousSdFlushMicros = 0;
 const unsigned long SdFlushInterval = 5000000;
+unsigned long previousMillisHC05Reading = 0;
 /********************* GLOBAL VARIABLES *********************/
 
 void setup(){
-  Serial.begin(9600);
-  pinMode(LED1pin, OUTPUT);
-  digitalWrite(LED1pin, LOW);
-  getEEPROMdata();    
-  ADXL345Setup();
-  SDModuleSetup(chipSelectSD);
-  RTC.begin();
-  DateTime now = RTC.now();
-  fileSetup(now);
-  attachInterrupt(digitalPinToInterrupt(interruptPin), ADXL_ISR, RISING);
-  ADXL345ReadConfiguration();
-  delay(delayStart);
-  adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);
-
-  HC05.begin(9600);
+  if(digitalRead(modePin) == 0) {
+    MODE = 0;
+  } else {
+    MODE = 10;
+  }
+  DateTime now = RTC.now(); //outside switch due to cross-initialization
+  
+  switch(MODE) {
+    case 0:
+      //Serial.begin(9600);
+      pinMode(LED1pin, OUTPUT);
+      digitalWrite(LED1pin, LOW);
+      getEEPROMdata();    
+      ADXL345Setup(ADXL345_BW_50, ADXL345_FIFOMODE_FIFO);
+      SDModuleSetup(chipSelectSD);
+      RTC.begin();
+      fileSetup(now);
+      attachInterrupt(digitalPinToInterrupt(interruptPin), ADXL_ISR, RISING);
+      ADXL345ReadConfiguration();
+      delay(delayStart);
+      adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);
+      break;
+    case 10:
+      //Serial.begin(9600);
+      HC05.begin(9600);
+      getEEPROMdata();    
+      ADXL345Setup(ADXL345_BW_50, ADXL345_FIFOMODE_BYPASS);
+      //ADXL345ReadConfiguration();
+      delay(delayStart);
+      adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);  
+      break;  
+  }
 }
 
 void loop(){
-  unsigned long currentMicros = micros();
-  if (fifoFull) {
-    int x,y,z;
-    for (int i=0; i<31; i++) {
-      adxl.readAccel(&x, &y, &z);
-      xAdj = (float)(x - xOffset) / xGain;
-      yAdj = (float)(y - yOffset) / yGain;
-      zAdj = (float)(z - zOffset) / zGain;
-      writeToFile(currentMicros, xAdj, yAdj, zAdj);
+  switch(MODE) {
+  case 0:
+    while(1) {
+      unsigned long currentMicros = micros();
+      if (fifoFull) {
+        int x,y,z;
+        for (int i=0; i<31; i++) {
+          adjAccel(x, y, z);
+          writeToFile(currentMicros, xAdj, yAdj, zAdj);
+        }
+        fifoFull = 0; 
+        //readingsToSerial(micros(), xAdj, yAdj, zAdj);
+        //readingsToSerial(micros(), x, y, z);
+      }
+      
+      if(currentMicros - previousSdFlushMicros > SdFlushInterval) {
+        digitalWrite(LED1pin, HIGH);
+        myFile.flush();
+        digitalWrite(LED1pin, LOW);
+        previousSdFlushMicros = currentMicros;
+      }
     }
-    fifoFull = 0; 
-    //readingsToSerial(micros(), xAdj, yAdj, zAdj);
-    //readingsToSerial(micros(), x, y, z);
-  }
-  
-  if(currentMicros - previousSdFlushMicros > SdFlushInterval) {
-    digitalWrite(LED1pin, HIGH);
-    myFile.flush();
-    digitalWrite(LED1pin, LOW);
-    previousSdFlushMicros = currentMicros;
-  }
-
-  if (HC05.available() > 0) {
-    Serial.write(HC05.read());
+    break;
+  case 10:
+    while(1) {
+      unsigned long currentMillis = millis();
+      /*
+      if (HC05.available() > 0) {
+        Serial.write(HC05.read());
+      }
+      */
+      if (currentMillis - previousMillisHC05Reading > 3000) {
+        //HC05.println("Hello android kups");
+        int x,y,z;
+        adjAccel(x, y, z);
+        HC05.print(currentMillis);
+        HC05.print(", ");
+        HC05.print(xAdj);
+        HC05.print(", ");
+        HC05.print(yAdj);
+        HC05.print(", ");
+        HC05.println(zAdj);
+        previousMillisHC05Reading = currentMillis;
+      }
+      break;
+    }
   }
 }
 
@@ -145,6 +193,13 @@ void abortWarning(int millisOn, int millisOff) {
   while(1) {
     Piezometer(buzzerPin, 500, 255); 
   } 
+}
+
+void adjAccel(int x, int y, int z) {
+  adxl.readAccel(&x, &y, &z);
+  xAdj = (float)(x - xOffset) / xGain;
+  yAdj = (float)(y - yOffset) / yGain;
+  zAdj = (float)(z - zOffset) / zGain;  
 }
 
 void ADXL_ISR() {
@@ -192,11 +247,11 @@ void ADXL345ReadConfiguration() {
   writeToFile(lblBuffer, (String)zGain);
 }
 
-void ADXL345Setup() {
+void ADXL345Setup(byte rate, byte FIFOMode) {
   
-  adxl.writeTo(ADXL345_BW_RATE, ADXL345_BW_12_5);
+  adxl.writeTo(ADXL345_BW_RATE, rate);
 
-  adxl.writeTo(ADXL345_FIFO_CTL, ADXL345_FIFOMODE_FIFO);
+  adxl.writeTo(ADXL345_FIFO_CTL, FIFOMode);
 
   //adxl.setAxisOffset(accData.xOffset, accData.yOffset, accData.zOffset);
   

@@ -63,7 +63,7 @@ void setup()
   adxl.powerOn();                     // Power on the ADXL345
 
   adxl.writeTo(ADXL345_FIFO_CTL, 0x0);
-  adxl.writeTo(ADXL345_BW_RATE, ADXL345_BW_12_5);
+  adxl.writeTo(ADXL345_BW_RATE, ADXL345_BW_50);
 
   adxl.setRangeSetting(2);           // Give the range settings
                                       // Accepted values are 2g, 4g, 8g or 16g
