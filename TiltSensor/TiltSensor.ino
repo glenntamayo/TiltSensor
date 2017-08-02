@@ -6,6 +6,7 @@
 #include <RTClib.h>
 #include <avr/pgmspace.h>
 #include <EEPROM.h>
+#include <SoftwareSerial.h>
 
 #define ADXL_POWERCTL_WAKEUP          0x0
 #define ADXL_POWERCTL_SLEEP           0x4
@@ -51,6 +52,8 @@ const int chipSelectSD = 4;
 const int LED1pin = 16;
 const int modePin = 15;
 const int buzzerPin = 17;
+const int softRX = 5;
+const int softTX = 6;
 /***************** ARDUINO PIN CONFIGURATION ****************/
 
 /******************** CLASS CONSTRUCTORS ********************/
@@ -58,6 +61,7 @@ SdFat SD;
 File myFile;
 RTC_DS1307 RTC;
 ADXL345 adxl = ADXL345();
+SoftwareSerial HC05(softRX, softTX);
 /******************** CLASS CONSTRUCTORS ********************/
 
 /********************* GLOBAL VARIABLES *********************/
@@ -105,6 +109,8 @@ void setup(){
   ADXL345ReadConfiguration();
   delay(delayStart);
   adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);
+
+  HC05.begin(9600);
 }
 
 void loop(){
@@ -128,6 +134,10 @@ void loop(){
     myFile.flush();
     digitalWrite(LED1pin, LOW);
     previousSdFlushMicros = currentMicros;
+  }
+
+  if (HC05.available() > 0) {
+    Serial.write(HC05.read());
   }
 }
 
@@ -184,7 +194,7 @@ void ADXL345ReadConfiguration() {
 
 void ADXL345Setup() {
   
-  adxl.writeTo(ADXL345_BW_RATE, ADXL345_BW_50);
+  adxl.writeTo(ADXL345_BW_RATE, ADXL345_BW_12_5);
 
   adxl.writeTo(ADXL345_FIFO_CTL, ADXL345_FIFOMODE_FIFO);
 
@@ -240,7 +250,7 @@ void ADXL345Setup() {
 void fileSetup(DateTime now) {
   long timeSince = (long) now.month() * 2592000 + (long) now.day() * 86400 + 
       (long) now.hour() * 3600 + (long) now.minute() * 60 + (long) now.second();
-  fileName = String(timeSince, HEX);
+  fileName = String(timeSince, DEC);
   fileName.trim();
   fileName.concat(".TXT");
   fileName.toCharArray(fileNameChar, fileName.length()+1);
