@@ -105,6 +105,7 @@ unsigned long previousMillisHC05Reading = 0;
 /********************* GLOBAL VARIABLES *********************/
 
 void setup(){
+  pinMode(modePin, INPUT_PULLUP);
   if(digitalRead(modePin) == 0) {
     MODE = 0;
   } else {
