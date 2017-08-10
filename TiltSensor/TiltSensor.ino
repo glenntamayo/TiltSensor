@@ -8,14 +8,6 @@
 #include <EEPROM.h>
 #include <SoftwareSerial.h>
 
-//MODE 0 - PRODUCTION
-//MODE 1 - ACCELEROMETER
-//MODE 2 - ACCELEROMETER + RTC
-//MODE 3 - ACCELEROMETER + RTC + SD
-//MODE 4 - ACCELEROMETER + RTC + SD + HC05
-//MODE 10 - ACCELEROMETER + HC05
-int MODE = 0;
-
 #define ADXL_POWERCTL_WAKEUP          0x0
 #define ADXL_POWERCTL_SLEEP           0x4
 #define ADXL_POWERCTL_MEASURE         0x8
@@ -58,7 +50,7 @@ char lblBuffer[40];
 const int interruptPin = 2;
 const int chipSelectSD = 4;
 const int LED1pin = 16;
-const int modePin = 15;
+const int rockerPin = 15;
 const int buzzerPin = 17;
 const int softRX = 5;
 const int softTX = 6;
@@ -77,6 +69,8 @@ const unsigned long delayStart = 1000;
 volatile bool fifoFull = 1;
 String fileName;
 char fileNameChar[10];
+
+bool ROCKER = 0;
 
 struct eepromData {
   char node[16];
@@ -105,43 +99,43 @@ unsigned long previousMillisHC05Reading = 0;
 /********************* GLOBAL VARIABLES *********************/
 
 void setup(){
-  pinMode(modePin, INPUT_PULLUP);
-  if(digitalRead(modePin) == 0) {
-    MODE = 0;
-  } else {
-    MODE = 10;
-  }
-  DateTime now = RTC.now(); //outside switch due to cross-initialization
-  
-  switch(MODE) {
-    case 0:
-      //Serial.begin(9600);
-      pinMode(LED1pin, OUTPUT);
-      digitalWrite(LED1pin, LOW);
-      getEEPROMdata();    
-      ADXL345Setup(ADXL345_BW_50, ADXL345_FIFOMODE_FIFO);
-      SDModuleSetup(chipSelectSD);
-      RTC.begin();
-      fileSetup(now);
-      attachInterrupt(digitalPinToInterrupt(interruptPin), ADXL_ISR, RISING);
-      ADXL345ReadConfiguration();
-      delay(delayStart);
-      adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);
-      break;
-    case 10:
-      //Serial.begin(9600);
-      HC05.begin(9600);
-      getEEPROMdata();    
-      ADXL345Setup(ADXL345_BW_50, ADXL345_FIFOMODE_BYPASS);
-      //ADXL345ReadConfiguration();
-      delay(delayStart);
-      adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);  
-      break;  
+pinMode(rockerPin, INPUT_PULLUP);
+if(digitalRead(rockerPin) == 0) {
+  ROCKER = 0;
+} else {
+  ROCKER = 1;
+}
+DateTime now = RTC.now(); //outside switch due to cross-initialization
+
+switch(ROCKER) {
+  case 0:
+    //Serial.begin(9600);
+    pinMode(LED1pin, OUTPUT);
+    digitalWrite(LED1pin, LOW);
+    getEEPROMdata();    
+    ADXL345Setup(ADXL345_BW_50, ADXL345_FIFOMODE_FIFO);
+    SDModuleSetup(chipSelectSD);
+    RTC.begin();
+    fileSetup(now);
+    attachInterrupt(digitalPinToInterrupt(interruptPin), ADXL_ISR, RISING);
+    ADXL345ReadConfiguration();
+    delay(delayStart);
+    adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);
+    break;
+  case 1:
+    //Serial.begin(9600);
+    HC05.begin(9600);
+    getEEPROMdata();    
+    ADXL345Setup(ADXL345_BW_50, ADXL345_FIFOMODE_BYPASS);
+    //ADXL345ReadConfiguration();
+    delay(delayStart);
+    adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);  
+    break;  
   }
 }
 
 void loop(){
-  switch(MODE) {
+  switch(ROCKER) {
   case 0:
     while(1) {
       unsigned long currentMicros = micros();
@@ -163,8 +157,7 @@ void loop(){
         previousSdFlushMicros = currentMicros;
       }
     }
-    break;
-  case 10:
+  case 1:
     while(1) {
       unsigned long currentMillis = millis();
       /*
@@ -185,10 +178,9 @@ void loop(){
         HC05.println(zAdj);
         previousMillisHC05Reading = currentMillis;
       }
-      break;
     }
   }
-}
+} 
 
 void abortWarning(int millisOn, int millisOff) {
   while(1) {
