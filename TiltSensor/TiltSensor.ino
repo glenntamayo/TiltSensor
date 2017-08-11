@@ -99,15 +99,15 @@ unsigned long previousMillisHC05Reading = 0;
 /********************* GLOBAL VARIABLES *********************/
 
 void setup(){
-pinMode(rockerPin, INPUT_PULLUP);
-if(digitalRead(rockerPin) == 0) {
-  ROCKER = 0;
-} else {
-  ROCKER = 1;
-}
-DateTime now = RTC.now(); //outside switch due to cross-initialization
-
-switch(ROCKER) {
+  pinMode(rockerPin, INPUT_PULLUP);
+  if(digitalRead(rockerPin) == 0) {
+    ROCKER = 0;
+  } else {
+    ROCKER = 1;
+  }
+  DateTime now = RTC.now(); //outside switch due to cross-initialization
+  
+  switch(ROCKER) {
   case 0:
     //Serial.begin(9600);
     pinMode(LED1pin, OUTPUT);
