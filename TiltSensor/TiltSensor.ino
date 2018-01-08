@@ -6,7 +6,6 @@
 #include <RTClib.h>
 #include <avr/pgmspace.h>
 #include <EEPROM.h>
-#include <SoftwareSerial.h>
 
 #define ADXL_POWERCTL_WAKEUP          0x0
 #define ADXL_POWERCTL_SLEEP           0x4
@@ -47,13 +46,9 @@ lblNode
 char lblBuffer[40];
 
 /***************** ARDUINO PIN CONFIGURATION ****************/
-const int interruptPin = 2;
 const int chipSelectSD = 4;
-const int LED1pin = 16;
-const int rockerPin = 15;
-const int buzzerPin = 17;
-const int softRX = 5;
-const int softTX = 6;
+//const int LED1pin = 9; //Pulse_41
+const int LED1pin = 16; //Pulse_42
 /***************** ARDUINO PIN CONFIGURATION ****************/
 
 /******************** CLASS CONSTRUCTORS ********************/
@@ -61,16 +56,14 @@ SdFat SD;
 File myFile;
 RTC_DS1307 RTC;
 ADXL345 adxl = ADXL345();
-SoftwareSerial HC05(softRX, softTX);
 /******************** CLASS CONSTRUCTORS ********************/
 
 /********************* GLOBAL VARIABLES *********************/
 const unsigned long delayStart = 1000;
-volatile bool fifoFull = 1;
 String fileName;
 char fileNameChar[10];
 
-bool ROCKER = 0;
+const float pi = 3.141592653589793;
 
 struct eepromData {
   char node[16];
@@ -93,98 +86,74 @@ int xAdj = 0;
 int yAdj = 0;
 int zAdj = 0;
 
-unsigned long previousSdFlushMicros = 0;
-const unsigned long SdFlushInterval = 5000000;
-unsigned long previousMillisHC05Reading = 0;
+double angle[3];
+
+unsigned long previousSdFlushMillis = 0;
+unsigned long previousMillis = 0;
+const unsigned long readInterval = 600000;
+const unsigned long SdFlushInterval = 600000;
+
 /********************* GLOBAL VARIABLES *********************/
 
 void setup(){
-  pinMode(rockerPin, INPUT_PULLUP);
-  if(digitalRead(rockerPin) == 0) {
-    ROCKER = 0;
-  } else {
-    ROCKER = 1;
+  Serial.begin(9600);
+  pinMode(LED1pin, OUTPUT);
+  digitalWrite(LED1pin, HIGH);
+  getEEPROMdata();    
+  ADXL345Setup(ADXL345_BW_50, ADXL345_FIFOMODE_BYPASS);
+  SDModuleSetup(chipSelectSD);
+  RTC.begin();
+  DateTime now = RTC.now();
+  fileSetup(now);
+  ADXL345ReadConfiguration();
+  for (int i = 0; i < 5; i++) {
+    Piezometer(LED1pin,  100, 255);
   }
-  DateTime now = RTC.now(); //outside switch due to cross-initialization
-  
-  switch(ROCKER) {
-  case 0:
-    //Serial.begin(9600);
-    pinMode(LED1pin, OUTPUT);
-    digitalWrite(LED1pin, LOW);
-    getEEPROMdata();    
-    ADXL345Setup(ADXL345_BW_50, ADXL345_FIFOMODE_FIFO);
-    SDModuleSetup(chipSelectSD);
-    RTC.begin();
-    fileSetup(now);
-    attachInterrupt(digitalPinToInterrupt(interruptPin), ADXL_ISR, RISING);
-    ADXL345ReadConfiguration();
-    delay(delayStart);
-    adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);
-    break;
-  case 1:
-    //Serial.begin(9600);
-    HC05.begin(9600);
-    getEEPROMdata();    
-    ADXL345Setup(ADXL345_BW_50, ADXL345_FIFOMODE_BYPASS);
-    //ADXL345ReadConfiguration();
-    delay(delayStart);
-    adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);  
-    break;  
-  }
+  delay(delayStart);
+  adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);
 }
 
 void loop(){
-  switch(ROCKER) {
-  case 0:
-    while(1) {
-      unsigned long currentMicros = micros();
-      if (fifoFull) {
-        int x,y,z;
-        for (int i=0; i<31; i++) {
-          adjAccel(x, y, z);
-          writeToFile(currentMicros, xAdj, yAdj, zAdj);
-        }
-        fifoFull = 0; 
-        //readingsToSerial(micros(), xAdj, yAdj, zAdj);
-        //readingsToSerial(micros(), x, y, z);
-      }
-      
-      if(currentMicros - previousSdFlushMicros > SdFlushInterval) {
-        digitalWrite(LED1pin, HIGH);
-        myFile.flush();
-        digitalWrite(LED1pin, LOW);
-        previousSdFlushMicros = currentMicros;
-      }
-    }
-  case 1:
-    while(1) {
-      unsigned long currentMillis = millis();
-      /*
-      if (HC05.available() > 0) {
-        Serial.write(HC05.read());
-      }
-      */
-      if (currentMillis - previousMillisHC05Reading > 3000) {
-        //HC05.println("Hello android kups");
-        int x,y,z;
-        adjAccel(x, y, z);
-        HC05.print(currentMillis);
-        HC05.print(", ");
-        HC05.print(xAdj);
-        HC05.print(", ");
-        HC05.print(yAdj);
-        HC05.print(", ");
-        HC05.println(zAdj);
-        previousMillisHC05Reading = currentMillis;
-      }
-    }
+  unsigned long currentMillis = millis();
+
+  if(currentMillis - previousMillis > readInterval) {
+    int x,y,z;
+    adjAccel(x, y, z);
+    double modulusG = sqrt(pow(xAdj, 2) + pow(yAdj, 2) + pow(zAdj, 2));
+    angle[0] = acos(xAdj / modulusG) * 180/pi;
+    angle[1] = acos(yAdj / modulusG) * 180/pi;
+    angle[2] = acos(zAdj / modulusG) * 180/pi;
+
+    DateTime now = RTC.now();
+    myFile.print(now.month());
+    myFile.print('-');
+    myFile.print(now.day());
+    myFile.print('-');
+    myFile.print(now.year());
+    myFile.print('-');
+    myFile.print(now.hour());
+    myFile.print(':');
+    myFile.print(now.minute());
+    myFile.print(':');
+    myFile.print(now.second());
+    myFile.print(", ");
+
+    writeToFile(angle[0], angle[1], angle[2]);
+    readingsToSerial(currentMillis, angle[0], angle[1], angle[2]);
+    previousMillis = currentMillis;
+  }
+  
+  if(currentMillis - previousSdFlushMillis > SdFlushInterval) {
+    digitalWrite(LED1pin, LOW);
+    myFile.flush();
+    digitalWrite(LED1pin, HIGH);
+    previousSdFlushMillis = currentMillis;
   }
 } 
 
-void abortWarning(int millisOn, int millisOff) {
+void abortWarning() {
   while(1) {
-    Piezometer(buzzerPin, 500, 255); 
+    Piezometer(LED1pin, 100, 255); 
   } 
 }
 
@@ -193,10 +162,6 @@ void adjAccel(int x, int y, int z) {
   xAdj = (float)(x - xOffset) / xGain;
   yAdj = (float)(y - yOffset) / yGain;
   zAdj = (float)(z - zOffset) / zGain;  
-}
-
-void ADXL_ISR() {
-  fifoFull = 1;
 }
 
 void ADXL345ReadConfiguration() {
@@ -319,7 +284,7 @@ void fileSetup(DateTime now) {
   } else {
     // if the file didn't open, print an error:
     Serial.println("error opening file");
-    abortWarning(1000,1000);
+    abortWarning();
   }  
 }
 
@@ -335,9 +300,9 @@ void getEEPROMdata() {
 }
 
 void Piezometer(int _piezoPin, unsigned long period, int dutyCycle) {
-  analogWrite(_piezoPin, dutyCycle);
-  delay(period);
   digitalWrite(_piezoPin, LOW);
+  delay(period);
+  analogWrite(_piezoPin, dutyCycle);
   delay(period);
 }
 
@@ -352,21 +317,39 @@ void readingsToSerial(unsigned long readingMillis, int x, int y, int z) {
   Serial.println();
 }
 
+void readingsToSerial(int x, int y, int z) {
+  Serial.print(x);
+  Serial.print(", ");
+  Serial.print(y);
+  Serial.print(", ");
+  Serial.print(z);
+  Serial.println();
+}
+
 void SDModuleSetup(int SDpin) {
   //Initialize SD card
   Serial.print("Initializing SD card...");
 
   if (!SD.begin(SDpin)) {
     Serial.println("initialization failed!");
-    abortWarning(1000,1000); 
+    abortWarning();
   } else {
     Serial.println("initialization done.");
   }
 }
 
-void writeToFile(unsigned long currentMicros, int x, int y, int z) {
-  myFile.print(currentMicros);
+void writeToFile(unsigned long currentMillis, int x, int y, int z) {
+  myFile.print(currentMillis);
   myFile.print(", ");
+  myFile.print(x);
+  myFile.print(", ");
+  myFile.print(y);
+  myFile.print(", ");
+  myFile.print(z);
+  myFile.print("\n");
+}
+
+void writeToFile(double x, double y, double z) {
   myFile.print(x);
   myFile.print(", ");
   myFile.print(y);
