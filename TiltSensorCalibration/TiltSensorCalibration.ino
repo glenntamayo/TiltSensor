@@ -6,14 +6,33 @@
  *  Created: Jul 13, 2016
  *  Updated: Sep 13, 2016
  *  *****************************************/
- 
-#include <SparkFun_ADXL345.h>
+
+//#define ACCEL_ADXL345
+#define ACCEL_MPU6050
+
+#ifdef ACCEL_ADXL345
+  #include <SparkFun_ADXL345.h>
+    /*********** COMMUNICATION SELECTION ***********/
+  /*    Comment Out The One You Are Not Using    */
+  //ADXL345 adxl = ADXL345(10);           // USE FOR SPI COMMUNICATION, ADXL345(CS_PIN);
+  ADXL345 adxl = ADXL345();             // USE FOR I2C COMMUNICATION
+  const int ScaleFactor = 256;
+#endif
+#ifdef ACCEL_MPU6050
+  #include "I2Cdev.h"
+  #include "MPU6050.h"
+  
+  // Arduino Wire library is required if I2Cdev I2CDEV_ARDUINO_WIRE implementation
+  // is used in I2Cdev.h
+  #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
+      #include "Wire.h"
+  #endif
+  MPU6050 accelgyro(0x69); // <-- use for AD0 high
+  const int ScaleFactor = 16384;
+#endif
+
 #include <EEPROM.h>
 
-/*********** COMMUNICATION SELECTION ***********/
-/*    Comment Out The One You Are Not Using    */
-//ADXL345 adxl = ADXL345(10);           // USE FOR SPI COMMUNICATION, ADXL345(CS_PIN);
-ADXL345 adxl = ADXL345();             // USE FOR I2C COMMUNICATION
 
 /****************** VARIABLES ******************/
 /*                                             */
@@ -51,28 +70,39 @@ struct adxl345Data {
 };
 
 char deviceNameChar[16];
-
+int x,y,z;  
 /******************** SETUP ********************/
 /*          Configure ADXL345 Settings         */
 void setup()
 {
-  Serial.begin(9600);                 // Start the serial terminal
+  Serial.begin(115200);                 // Start the serial terminal
   Serial.println("SparkFun ADXL345 Accelerometer Breakout Calibration");
   Serial.println();
+  #ifdef ACCEL_ADXL345
+    adxl.powerOn();                     // Power on the ADXL345
+
+    adxl.writeTo(ADXL345_FIFO_CTL, 0x0);
+    adxl.writeTo(ADXL345_BW_RATE, ADXL345_BW_50);
   
-  adxl.powerOn();                     // Power on the ADXL345
-
-  adxl.writeTo(ADXL345_FIFO_CTL, 0x0);
-  adxl.writeTo(ADXL345_BW_RATE, ADXL345_BW_50);
-
-  adxl.setRangeSetting(2);           // Give the range settings
-                                      // Accepted values are 2g, 4g, 8g or 16g
-                                      // Higher Values = Wider Measurement Range
-                                      // Lower Values = Greater Sensitivity
-                                      
-  adxl.setSpiBit(0);                // Configure the device: 4 wire SPI mode = '0' or 3 wire SPI mode = 1
-                                      // Default: Set to 1
+    adxl.setRangeSetting(2);           // Give the range settings
+                                        // Accepted values are 2g, 4g, 8g or 16g
+                                        // Higher Values = Wider Measurement Range
+                                        // Lower Values = Greater Sensitivity
+                                        
+    adxl.setSpiBit(0);                // Configure the device: 4 wire SPI mode = '0' or 3 wire SPI mode = 1
+                                        // Default: Set to 1
                                       // SPI pins on the ATMega328: 11, 12 and 13 as reference in SPI Library 
+  #endif
+  #ifdef ACCEL_MPU6050
+    #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
+        Wire.begin();
+    #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
+        Fastwire::setup(400, true);
+    #endif
+    accelgyro.initialize();
+    Serial.println(accelgyro.testConnection() ? "MPU6050 connection successful" : "MPU6050 connection failed");
+  #endif
+  
 }
 
 /****************** MAIN CODE ******************/
@@ -112,8 +142,12 @@ void loop() {
 
 void calibrate() {
    // Get the Accelerometer Readings
-  int x,y,z;                          // init variables hold results
-  adxl.readAccel(&x, &y, &z);         // Read the accelerometer values and store in variables x,y,z
+  #ifdef ACCEL_ADXL345
+    adxl.readAccel(&x, &y, &z);
+  #endif
+  #ifdef ACCEL_MPU6050
+    accelgyro.getAcceleration(&x, &y, &z);
+  #endif  
 
   if(x < AccelMinX) AccelMinX = x;
   if(x > AccelMaxX) AccelMaxX = x;
@@ -136,9 +170,9 @@ void calibrate() {
   offsetY = 0.5 * (AccelMaxY + AccelMinY);
   offsetZ = 0.5 * (AccelMaxZ + AccelMinZ);
   Serial.print("Offsets: "); Serial.print(offsetX); Serial.print("  "); Serial.print(offsetY); Serial.print("  ");  Serial.println(offsetZ);
-  gainX = 0.5 * (AccelMaxX - AccelMinX) / 256;
-  gainY = 0.5 * (AccelMaxY - AccelMinY) / 256;
-  gainZ = 0.5 * (AccelMaxZ - AccelMinZ) / 256;
+  gainX = 0.5 * (AccelMaxX - AccelMinX) / ScaleFactor;
+  gainY = 0.5 * (AccelMaxY - AccelMinY) / ScaleFactor;
+  gainZ = 0.5 * (AccelMaxZ - AccelMinZ) / ScaleFactor;
   Serial.print("Gains: "); Serial.print(gainX); Serial.print("  "); Serial.print(gainY); Serial.print("  ");  Serial.println(gainZ);;
   Serial.println();
 }
