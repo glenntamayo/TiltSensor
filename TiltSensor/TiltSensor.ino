@@ -1,85 +1,33 @@
 //Created by Glenn Gil David Tamayo
 
-//#define ACCEL_ADXL345
-//#define ACCEL_MPU6050
-#define ACCEL_MMA8451
+//#define ACCELEROMETERADXL345
+#define ACCELEROMETERMMA8451
+//#define ACCELEROMETERMPU6050
 
-#ifdef ACCEL_ADXL345
-  #include <SparkFun_ADXL345.h>
-#endif
-
-#ifdef ACCEL_MMA8451
-  #include <Wire.h>
-  #include <Adafruit_MMA8451.h>
-  #include <Adafruit_Sensor.h>
-
-  Adafruit_MMA8451 mma = Adafruit_MMA8451();
-#endif
-
+#include <Wire.h>
 #include <SPI.h>
 #include <SdFat.h>
 #include <RTClib.h>
-#include <avr/pgmspace.h>
-#include <EEPROM.h>
-
-#define ADXL_POWERCTL_WAKEUP          0x0
-#define ADXL_POWERCTL_SLEEP           0x4
-#define ADXL_POWERCTL_MEASURE         0x8
-
-#define ADXL345_FIFOMODE_BYPASS       0x0
-#define ADXL345_FIFOMODE_FIFO         0x5F
-#define ADXL345_FIFOMODE_STREAM       0x9F
-#define ADXL345_FIFOMODE_TRIGGER      0xDF
-
-const char lblDEVID[] PROGMEM = "Device ID                         :";
-const char lblOFSX[] PROGMEM = "X-Axis Offset                     :";
-const char lblOFSY[] PROGMEM = "Y-Axis Offset                     :";
-const char lblOFSZ[] PROGMEM = "Z-Axis Offset                     :";
-const char lblBWRATE[] PROGMEM = "Data Rate and Power Mode Control  :";
-const char lblPOWERCTL[] PROGMEM = "Power-Saving Features Control     :";
-const char lblINTENABLE[] PROGMEM = "Interrupt Enable Control          :";
-const char lblINTMAP[] PROGMEM = "Interrupt Mapping Control         :";
-const char lblINTSOURCE[] PROGMEM = "Source of Interrupts              :";
-const char lblDATAFORMAT[] PROGMEM = "Data Format                       :";
-const char lblFIFOCTL[] PROGMEM = "FIFO Control                      :";
-const char lblFIFOSTATUS[] PROGMEM = "FIFO Status                       :";
-const char lblxOffset[] PROGMEM = "Manual X-Axis Offset              :";
-const char lblyOffset[] PROGMEM = "Manual Y-Axis Offset              :";
-const char lblzOffset[] PROGMEM = "Manual Z-Axis Offset              :";
-const char lblxGain[] PROGMEM = "Manual X-Axis Gain                :";
-const char lblyGain[] PROGMEM = "Manual Y-Axis Gain                :";
-const char lblzGain[] PROGMEM = "Manual Z-Axis Gain                :";
-const char lblNode[] PROGMEM = "Node                              :";
-
-const char* const string_table[] PROGMEM = {lblDEVID, lblOFSX,
-lblOFSY, lblOFSZ, lblBWRATE, lblPOWERCTL, lblINTENABLE,
-lblINTMAP, lblINTSOURCE, lblDATAFORMAT, lblFIFOCTL, lblFIFOSTATUS,
-lblxOffset, lblyOffset, lblzOffset, lblxGain, lblyGain, lblzGain,
-lblNode
-};
-
-char lblBuffer[40];
+#include <Accelerometer_ggt.h>
 
 /***************** ARDUINO PIN CONFIGURATION ****************/
 const int chipSelectSD = 4;
-const int intDataReadyPin = 2;
 /***************** ARDUINO PIN CONFIGURATION ****************/
 
 /******************** CLASS CONSTRUCTORS ********************/
 SdFat SD;
 File myFile;
 RTC_DS1307 RTC;
-#ifdef ACCEL_ADXL345
-  ADXL345 adxl = ADXL345();
+#ifdef ACCELEROMETERADXL345
+  Accelerometer_ggt accelerometer = Accelerometer_ggt("adxl345");
 #endif
-#ifdef ACCEL_MPU6050
-  #include "I2Cdev.h"
-  #include "MPU6050.h"
-  
-  #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
-      #include "Wire.h"
-  #endif
-  MPU6050 accelgyro(0x69); // <-- use for AD0 high
+
+#ifdef ACCELEROMETERMMA8451
+  Accelerometer_ggt accelerometer = Accelerometer_ggt("mma8451");
+#endif
+
+#ifdef ACCELEROMETERMPU6050
+  Accelerometer_ggt accelerometer = Accelerometer_ggt("mpu6050");
 #endif
 
 /******************** CLASS CONSTRUCTORS ********************/
@@ -91,33 +39,9 @@ char fileNameChar[10];
 
 const float pi = 3.141592653589793;
 
-struct eepromData {
-  char node[16];
-  int xOffset;
-  int yOffset;
-  int zOffset;
-  float xGain;
-  float yGain;
-  float zGain;  
-};
-eepromData accData;
-String node;
-int xOffset = 0;
-int yOffset = 0;
-int zOffset = 0;
-float xGain = 1;
-float yGain = 1;
-float zGain = 1;
-int xAdj = 0;
-int yAdj = 0;
-int zAdj = 0;
-
-int16_t x, y, z;
-int16_t xPrev = 0, yPrev = 0, zPrev = 0;
-int16_t xFilter, yFilter, zFilter;
-String angle[3];
-
-String readingEntry;
+#ifdef ACCELEROMETERADXL345
+  const byte adxlFifoMode = ADXL345_FIFOMODE_BYPASS;
+#endif
 
 unsigned long previousMillisWrite = 0;
 unsigned long previousMillisRead = 0;
@@ -128,62 +52,22 @@ const unsigned long writeInterval = 600000;
 /********************* GLOBAL VARIABLES *********************/
 
 void setup(){
-  Serial.begin(115200);
-  getEEPROMdata();  
+  //Serial.begin(115200);
   SDModuleSetup(chipSelectSD);
   RTC.begin();
   DateTime now = RTC.now();
   fileSetup(now);
-  pinMode(intDataReadyPin, INPUT);
-  #ifdef ACCEL_ADXL345
-    ADXL345Setup(ADXL345_BW_50, ADXL345_FIFOMODE_BYPASS);
-  #endif
-  #ifdef ACCEL_MPU6050
-    #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
-        Wire.begin();
-    #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
-        Fastwire::setup(400, true);
-    #endif
-    accelgyro.initialize();
-    Serial.println(accelgyro.testConnection() ? "MPU6050 connection successful" : "MPU6050 connection failed");
-
-    Serial.println(accelgyro.getFullScaleAccelRange());
-    Serial.println(accelgyro.getDHPFMode());
+  #ifdef ACCELEROMETERADXL345  
+    AdxlSetup(ADXL345_BW_1_56);
   #endif
 
-  #ifdef ACCEL_MMA8451
-    Serial.println("Adafruit MMA8451 test!");
-    
-  
-    if (! mma.begin()) {
-      Serial.println("Couldnt start");
-      while (1);
-    }
-    Serial.println("MMA8451 found!");
-    
-    //mma.setRange(MMA8451_RANGE_2_G);
-    
-    Serial.print("Range = "); Serial.print(2 << mma.getRange());  
-    Serial.println("G");
-    //mma.setDataRate(MMA8451_DATARATE_6_25HZ);
-    Serial.println(mma.readRegister8(MMA8451_REG_CTRL_REG1), HEX);
-    //Serial.println(mma.getDataRate());
-    //mma.writeRegister8(MMA8451_REG_CTRL_REG4, 1);
-    //mma.writeRegister8(MMA8451_REG_CTRL_REG5, 1);
-    Serial.println(mma.readRegister8(MMA8451_REG_CTRL_REG4));
-    Serial.println(mma.readRegister8(MMA8451_REG_CTRL_REG5));
-  #endif
-  
-  #ifdef ACCEL_ADXL345
-    ADXL345ReadConfiguration();
-    delay(delayStart);
-  #endif
-  #ifdef ACCEL_ADXL345
-    adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);
+  #ifdef ACCELEROMETERMMA8451
+    MmaSetup();
   #endif
 
-
-  
+  #ifdef ACCELEROMETERMPU6050
+    Mpu6050Setup();
+  #endif
 }
 
 void loop(){
@@ -191,16 +75,12 @@ void loop(){
   unsigned long currentMillis = millis();
   
   if(currentMillis - previousMillisRead > readInterval) {
-    accelFilter(0.9);
+    accelerometer.filter(0.9);
     previousMillisRead = currentMillis;
     
   }
   if(currentMillis - previousMillisWrite > writeInterval) {
-    float modulusG = sqrt(pow(xFilter, 2) + pow(yFilter, 2) + pow(zFilter, 2));
-    angle[0] = String(acos(xFilter / modulusG) * 180/pi, 2);
-    angle[1] = String(acos(yFilter / modulusG) * 180/pi, 2);
-    angle[2] = String(acos(zFilter / modulusG) * 180/pi, 2);
-
+    String readingEntry;
     DateTime now = RTC.now();
     if (now.hour() < 10) {
       readingEntry = "0";
@@ -223,11 +103,11 @@ void loop(){
       readingEntry.concat(now.second());
     }
     readingEntry.concat('\t');
-    readingEntry.concat(angle[0]);
+    readingEntry.concat(accelerometer.xAngleFil);
     readingEntry.concat('\t');
-    readingEntry.concat(angle[1]);
+    readingEntry.concat(accelerometer.yAngleFil);
     readingEntry.concat('\t');
-    readingEntry.concat(angle[2]);         
+    readingEntry.concat(accelerometer.zAngleFil);         
     //Serial.println(readingEntry);
     myFile.println(readingEntry);
     myFile.flush();
@@ -236,141 +116,6 @@ void loop(){
   }
   
 } 
-
-void accelFilter(float alpha) {
-  adjAccel();
-  xFilter = (xAdj * (1 - alpha)) + (xPrev * alpha);
-  yFilter = (yAdj * (1 - alpha)) + (yPrev * alpha);
-  zFilter = (zAdj * (1 - alpha)) + (zPrev * alpha);
-  xPrev = xFilter;
-  yPrev = yFilter;
-  zPrev = zFilter;
-}
-
-void adjAccel() {
-  #ifdef ACCEL_ADXL345
-    adxl.readAccel(&x, &y, &z);
-  #endif
-  #ifdef ACCEL_MPU6050
-    accelgyro.getAcceleration(&x, &y, &z);
-  #endif
-  #ifdef ACCEL_MPU6050DMP
-    
-  #endif
-  #ifdef ACCEL_MMA8451
-    mma.read();
-    x = mma.x;
-    y = mma.y;
-    z = mma.z;
-  #endif
-  /*
-  xAdj = (float)(x - xOffset) / xGain;
-  yAdj = (float)(y - yOffset) / yGain;
-  zAdj = (float)(z - zOffset) / zGain;  
-  */
-  xAdj = x;
-  yAdj = y;
-  zAdj = z;  
-}
-
-
-#ifdef ACCEL_ADXL345
-  void ADXL345Setup(byte rate, byte FIFOMode) {
-    
-    adxl.writeTo(ADXL345_BW_RATE, rate);
-  
-    adxl.writeTo(ADXL345_FIFO_CTL, FIFOMode);
-  
-    //adxl.setAxisOffset(accData.xOffset, accData.yOffset, accData.zOffset);
-    
-    adxl.setInterruptMapping(1, 0);
-    adxl.setInterrupt(1 ,1);
-  
-    // Give the range settings
-    // Accepted values are 2g, 4g, 8g or 16g
-    // Higher Values = Wider Measurement Range
-    // Lower Values = Greater Sensitivity
-    adxl.setRangeSetting(2);
-  
-    // Set to activate movement detection in the axes 
-    //"adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
-    adxl.setActivityXYZ(0, 0, 0);
-  
-    // Set activity   // Inactivity thresholds (0-255)
-    adxl.setActivityThreshold(75); // 62.5mg per increment   
-  
-    // Set to detect inactivity in all the axes 
-    //"adxl.setInactivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
-    adxl.setInactivityXYZ(0, 0, 0);     
-  
-    // Set inactivity // Inactivity thresholds (0-255)
-    adxl.setInactivityThreshold(75);    // 62.5mg per increment   
-    adxl.setTimeInactivity(10);         // How many seconds of no activity is inactive?
-  
-    // Detect taps in the directions turned ON
-    //"adxl.setTapDetectionOnX(X, Y, Z);" (1 == ON, 0 == OFF)
-    adxl.setTapDetectionOnXYZ(0, 0, 0); 
-   
-    // Set values for what is considered a TAP and what is a float TAP (0-255)
-    adxl.setTapThreshold(50);           // 62.5 mg per increment
-    adxl.setTapDuration(15);            // 625 μs per increment
-    adxl.setfloatTapLatency(80);       // 1.25 ms per increment
-    adxl.setfloatTapWindow(200);       // 1.25 ms per increment
-   
-    // Set values for what is considered FREE FALL (0-255)
-    adxl.setFreeFallThreshold(7);       // (5 - 9) recommended - 62.5mg per increment
-    adxl.setFreeFallDuration(30);       // (20 - 70) recommended - 5ms per increment
-   
-    // Turn on Interrupts for each mode (1 == ON, 0 == OFF)
-    adxl.InactivityINT(0);
-    adxl.ActivityINT(0);
-    adxl.FreeFallINT(0);
-    adxl.floatTapINT(0);
-    adxl.singleTapINT(0);
-  
-  }
-
-  void ADXL345ReadConfiguration() {
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[18])));
-    writeToFile(lblBuffer, node);
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[0])));
-    writeToFile(lblBuffer, ADXL345_DEVID, "HEX");
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[1])));
-    writeToFile(lblBuffer, ADXL345_OFSX, "HEX");
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[2])));
-    writeToFile(lblBuffer, ADXL345_OFSY, "HEX");
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[3])));
-    writeToFile(lblBuffer, ADXL345_OFSZ, "HEX");
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[4])));
-    writeToFile(lblBuffer, ADXL345_BW_RATE, "HEX");
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[5])));
-    writeToFile(lblBuffer, ADXL345_POWER_CTL, "HEX");
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[6])));
-    writeToFile(lblBuffer, ADXL345_INT_ENABLE, "HEX");
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[7])));
-    writeToFile(lblBuffer, ADXL345_INT_MAP, "HEX");
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[8])));
-    writeToFile(lblBuffer, ADXL345_INT_SOURCE, "HEX");
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[9])));
-    writeToFile(lblBuffer, ADXL345_DATA_FORMAT, "HEX");
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[10])));
-    writeToFile(lblBuffer, ADXL345_FIFO_CTL, "HEX");
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[11])));
-    writeToFile(lblBuffer, ADXL345_FIFO_STATUS, "HEX");
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[12])));
-    writeToFile(lblBuffer, (String)xOffset);
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[13])));
-    writeToFile(lblBuffer, (String)yOffset);
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[14])));
-    writeToFile(lblBuffer, (String)zOffset);
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[15])));
-    writeToFile(lblBuffer, (String)xGain);
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[16])));
-    writeToFile(lblBuffer, (String)yGain);
-    strcpy_P(lblBuffer, (char*)pgm_read_word(&(string_table[17])));
-    writeToFile(lblBuffer, (String)zGain);
-  }
-#endif
 
 void fileSetup(DateTime now) {
   long timeSince = (long) now.month() * 2592000 + (long) now.day() * 86400 + 
@@ -381,50 +126,58 @@ void fileSetup(DateTime now) {
   fileName.toCharArray(fileNameChar, fileName.length()+1);
   myFile = SD.open(fileNameChar, FILE_WRITE);
   if (myFile) {
-    myFile.print(now.year());
-    myFile.print('/');
-    myFile.print(now.month());
-    myFile.print('/');
-    myFile.print(now.day());
-    myFile.print(' ');
-    myFile.print(now.hour());
-    myFile.print(':');
-    myFile.print(now.minute());
-    myFile.print(':');
-    myFile.println(now.second());
+    String strToSD = "";
+    strToSD.concat(now.year());
+    strToSD.concat('/');
+    strToSD.concat(now.month());
+    strToSD.concat('/');
+    strToSD.concat(now.day());
+    strToSD.concat(' ');
+    strToSD.concat(now.hour());
+    strToSD.concat(':');
+    strToSD.concat(now.minute());
+    strToSD.concat(':');
+    strToSD.concat(now.second());
+    myFile.println(strToSD);
     myFile.flush();
   } else {
     // if the file didn't open, print an error:
-    Serial.println("error opening file");
+//    Serial.println("error opening file");
   }  
-}
-
-void getEEPROMdata() {
-  EEPROM.get(0, accData);
-  node = accData.node;
-  xOffset = accData.xOffset;
-  yOffset = accData.yOffset;
-  zOffset = accData.zOffset;
-  xGain = accData.xGain;
-  yGain = accData.yGain;
-  zGain = accData.zGain;  
-}
-
-void Piezometer(int _piezoPin, unsigned long period, int dutyCycle) {
-  digitalWrite(_piezoPin, LOW);
-  delay(period);
-  analogWrite(_piezoPin, dutyCycle);
-  delay(period);
 }
 
 void SDModuleSetup(int SDpin) {
   //Initialize SD card
-  Serial.print("Initializing SD card...");
+  //Serial.print("Initializing SD card...");
 
   if (!SD.begin(SDpin)) {
-    Serial.println("initialization failed!");
+    //Serial.println("initialization failed!");
   
   } else {
-    Serial.println("initialization done.");
+    //Serial.println(F("initialization done."));
   }
 }
+
+#ifdef ACCELEROMETERADXL345
+
+  void AdxlSetup(byte rate){
+    accelerometer.adxl.writeTo(ADXL345_BW_RATE, rate);
+    accelerometer.adxl.writeTo(ADXL345_FIFO_CTL, adxlFifoMode);
+    accelerometer.adxl.setRangeSetting(2);           
+    accelerometer.adxl.writeTo(ADXL345_POWER_CTL, 0x8); //MEASURE MODE  
+  }
+#endif
+
+#ifdef ACCELEROMETERMMA8451
+  void MmaSetup() {
+    accelerometer.mma.begin();
+    accelerometer.mma.setRange(MMA8451_RANGE_2_G);
+    accelerometer.mma.setDataRate(MMA8451_DATARATE_6_25HZ);
+  }
+#endif
+
+#ifdef ACCELEROMETERMPU6050
+  void Mpu6050Setup() {
+    accelerometer.mpu.initialize();
+  }
+#endif
