@@ -8,7 +8,8 @@
  *  *****************************************/
 
 //#define ACCEL_ADXL345
-#define ACCEL_MPU6050
+//#define ACCEL_MPU6050
+#define ACCEL_MMA8451
 
 #ifdef ACCEL_ADXL345
   #include <SparkFun_ADXL345.h>
@@ -29,6 +30,15 @@
   #endif
   MPU6050 accelgyro(0x69); // <-- use for AD0 high
   const int ScaleFactor = 16384;
+#endif
+
+#ifdef ACCEL_MMA8451
+  #include <Wire.h>
+  #include <Adafruit_MMA8451.h>
+  #include <Adafruit_Sensor.h>
+
+  Adafruit_MMA8451 mma = Adafruit_MMA8451();
+  const int ScaleFactor = 4096;
 #endif
 
 #include <EEPROM.h>
@@ -102,6 +112,29 @@ void setup()
     accelgyro.initialize();
     Serial.println(accelgyro.testConnection() ? "MPU6050 connection successful" : "MPU6050 connection failed");
   #endif
+
+  #ifdef ACCEL_MMA8451
+    Serial.println("Adafruit MMA8451 test!");
+    
+  
+    if (! mma.begin()) {
+      Serial.println("Couldnt start");
+      while (1);
+    }
+    Serial.println("MMA8451 found!");
+    
+    //mma.setRange(MMA8451_RANGE_2_G);
+    
+    Serial.print("Range = "); Serial.print(2 << mma.getRange());  
+    Serial.println("G");
+    //mma.setDataRate(MMA8451_DATARATE_6_25HZ);
+    Serial.println(mma.readRegister8(MMA8451_REG_CTRL_REG1), HEX);
+    //Serial.println(mma.getDataRate());
+    //mma.writeRegister8(MMA8451_REG_CTRL_REG4, 1);
+    //mma.writeRegister8(MMA8451_REG_CTRL_REG5, 1);
+    Serial.println(mma.readRegister8(MMA8451_REG_CTRL_REG4));
+    Serial.println(mma.readRegister8(MMA8451_REG_CTRL_REG5));
+  #endif
   
 }
 
@@ -148,6 +181,12 @@ void calibrate() {
   #ifdef ACCEL_MPU6050
     accelgyro.getAcceleration(&x, &y, &z);
   #endif  
+  #ifdef ACCEL_MMA8451
+    mma.read();
+    x = mma.x;
+    y = mma.y;
+    z = mma.z;
+  #endif
 
   if(x < AccelMinX) AccelMinX = x;
   if(x > AccelMaxX) AccelMaxX = x;

@@ -1,9 +1,19 @@
 //Created by Glenn Gil David Tamayo
+
 //#define ACCEL_ADXL345
-#define ACCEL_MPU6050
+//#define ACCEL_MPU6050
+#define ACCEL_MMA8451
 
 #ifdef ACCEL_ADXL345
   #include <SparkFun_ADXL345.h>
+#endif
+
+#ifdef ACCEL_MMA8451
+  #include <Wire.h>
+  #include <Adafruit_MMA8451.h>
+  #include <Adafruit_Sensor.h>
+
+  Adafruit_MMA8451 mma = Adafruit_MMA8451();
 #endif
 
 #include <SPI.h>
@@ -52,6 +62,7 @@ char lblBuffer[40];
 
 /***************** ARDUINO PIN CONFIGURATION ****************/
 const int chipSelectSD = 4;
+const int intDataReadyPin = 2;
 /***************** ARDUINO PIN CONFIGURATION ****************/
 
 /******************** CLASS CONSTRUCTORS ********************/
@@ -65,13 +76,12 @@ RTC_DS1307 RTC;
   #include "I2Cdev.h"
   #include "MPU6050.h"
   
-  // Arduino Wire library is required if I2Cdev I2CDEV_ARDUINO_WIRE implementation
-  // is used in I2Cdev.h
   #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
       #include "Wire.h"
   #endif
   MPU6050 accelgyro(0x69); // <-- use for AD0 high
 #endif
+
 /******************** CLASS CONSTRUCTORS ********************/
 
 /********************* GLOBAL VARIABLES *********************/
@@ -103,20 +113,28 @@ int yAdj = 0;
 int zAdj = 0;
 
 int16_t x, y, z;
-double angle[3];
+int16_t xPrev = 0, yPrev = 0, zPrev = 0;
+int16_t xFilter, yFilter, zFilter;
+String angle[3];
 
-unsigned long previousSdFlushMillis = 0;
-unsigned long previousMillis = 0;
-//const unsigned long readInterval = 600000;
-//const unsigned long SdFlushInterval = 600000;
+String readingEntry;
+
+unsigned long previousMillisWrite = 0;
+unsigned long previousMillisRead = 0;
+
 const unsigned long readInterval = 1000;
-const unsigned long SdFlushInterval = 1000;
+const unsigned long writeInterval = 600000;
 
 /********************* GLOBAL VARIABLES *********************/
 
 void setup(){
   Serial.begin(115200);
-  getEEPROMdata();    
+  getEEPROMdata();  
+  SDModuleSetup(chipSelectSD);
+  RTC.begin();
+  DateTime now = RTC.now();
+  fileSetup(now);
+  pinMode(intDataReadyPin, INPUT);
   #ifdef ACCEL_ADXL345
     ADXL345Setup(ADXL345_BW_50, ADXL345_FIFOMODE_BYPASS);
   #endif
@@ -128,51 +146,106 @@ void setup(){
     #endif
     accelgyro.initialize();
     Serial.println(accelgyro.testConnection() ? "MPU6050 connection successful" : "MPU6050 connection failed");
+
+    Serial.println(accelgyro.getFullScaleAccelRange());
+    Serial.println(accelgyro.getDHPFMode());
   #endif
-  SDModuleSetup(chipSelectSD);
-  RTC.begin();
-  DateTime now = RTC.now();
-  fileSetup(now);
+
+  #ifdef ACCEL_MMA8451
+    Serial.println("Adafruit MMA8451 test!");
+    
+  
+    if (! mma.begin()) {
+      Serial.println("Couldnt start");
+      while (1);
+    }
+    Serial.println("MMA8451 found!");
+    
+    //mma.setRange(MMA8451_RANGE_2_G);
+    
+    Serial.print("Range = "); Serial.print(2 << mma.getRange());  
+    Serial.println("G");
+    //mma.setDataRate(MMA8451_DATARATE_6_25HZ);
+    Serial.println(mma.readRegister8(MMA8451_REG_CTRL_REG1), HEX);
+    //Serial.println(mma.getDataRate());
+    //mma.writeRegister8(MMA8451_REG_CTRL_REG4, 1);
+    //mma.writeRegister8(MMA8451_REG_CTRL_REG5, 1);
+    Serial.println(mma.readRegister8(MMA8451_REG_CTRL_REG4));
+    Serial.println(mma.readRegister8(MMA8451_REG_CTRL_REG5));
+  #endif
+  
   #ifdef ACCEL_ADXL345
     ADXL345ReadConfiguration();
+    delay(delayStart);
   #endif
-  delay(delayStart);
   #ifdef ACCEL_ADXL345
     adxl.writeTo(ADXL345_POWER_CTL, ADXL_POWERCTL_MEASURE);
   #endif
+
+
+  
 }
 
 void loop(){
+  
   unsigned long currentMillis = millis();
-
-  if(currentMillis - previousMillis > readInterval) {
-    adjAccel();
-    double modulusG = sqrt(pow(xAdj, 2) + pow(yAdj, 2) + pow(zAdj, 2));
-    angle[0] = acos(xAdj / modulusG) * 180/pi;
-    angle[1] = acos(yAdj / modulusG) * 180/pi;
-    angle[2] = acos(zAdj / modulusG) * 180/pi;
+  
+  if(currentMillis - previousMillisRead > readInterval) {
+    accelFilter(0.9);
+    previousMillisRead = currentMillis;
+    
+  }
+  if(currentMillis - previousMillisWrite > writeInterval) {
+    float modulusG = sqrt(pow(xFilter, 2) + pow(yFilter, 2) + pow(zFilter, 2));
+    angle[0] = String(acos(xFilter / modulusG) * 180/pi, 2);
+    angle[1] = String(acos(yFilter / modulusG) * 180/pi, 2);
+    angle[2] = String(acos(zFilter / modulusG) * 180/pi, 2);
 
     DateTime now = RTC.now();
-    /*
-    myFile.print(now.month());
-    myFile.print('-');
-    myFile.print(now.day());
-    myFile.print('-');
-    myFile.print(now.year());
-    myFile.print('-');
-    myFile.print(now.hour());
-    myFile.print(':');
-    myFile.print(now.minute());
-    myFile.print(':');
-    myFile.print(now.second());
-    myFile.print(", ");
+    if (now.hour() < 10) {
+      readingEntry = "0";
+      readingEntry.concat(now.hour());
+    } else {
+      readingEntry = String(now.hour());
+    }
+    readingEntry.concat(':');
+    if (now.minute() < 10) {
+      readingEntry.concat("0");
+      readingEntry.concat(now.minute());
+    } else {
+      readingEntry.concat(now.minute());
+    }
+    readingEntry.concat(':');
+    if (now.second() < 10) {
+      readingEntry.concat("0");
+      readingEntry.concat(now.second());
+    } else {
+      readingEntry.concat(now.second());
+    }
+    readingEntry.concat('\t');
+    readingEntry.concat(angle[0]);
+    readingEntry.concat('\t');
+    readingEntry.concat(angle[1]);
+    readingEntry.concat('\t');
+    readingEntry.concat(angle[2]);         
+    //Serial.println(readingEntry);
+    myFile.println(readingEntry);
+    myFile.flush();
 
-    writeToFile(angle[0], angle[1], angle[2]);
-    */
-    readingsToSerial(currentMillis, angle[0], angle[1], angle[2]);
-    previousMillis = currentMillis;
+    previousMillisWrite = currentMillis;
   }
+  
 } 
+
+void accelFilter(float alpha) {
+  adjAccel();
+  xFilter = (xAdj * (1 - alpha)) + (xPrev * alpha);
+  yFilter = (yAdj * (1 - alpha)) + (yPrev * alpha);
+  zFilter = (zAdj * (1 - alpha)) + (zPrev * alpha);
+  xPrev = xFilter;
+  yPrev = yFilter;
+  zPrev = zFilter;
+}
 
 void adjAccel() {
   #ifdef ACCEL_ADXL345
@@ -181,11 +254,24 @@ void adjAccel() {
   #ifdef ACCEL_MPU6050
     accelgyro.getAcceleration(&x, &y, &z);
   #endif
+  #ifdef ACCEL_MPU6050DMP
+    
+  #endif
+  #ifdef ACCEL_MMA8451
+    mma.read();
+    x = mma.x;
+    y = mma.y;
+    z = mma.z;
+  #endif
+  /*
   xAdj = (float)(x - xOffset) / xGain;
   yAdj = (float)(y - yOffset) / yGain;
   zAdj = (float)(z - zOffset) / zGain;  
+  */
+  xAdj = x;
+  yAdj = y;
+  zAdj = z;  
 }
-
 
 
 #ifdef ACCEL_ADXL345
@@ -225,11 +311,11 @@ void adjAccel() {
     //"adxl.setTapDetectionOnX(X, Y, Z);" (1 == ON, 0 == OFF)
     adxl.setTapDetectionOnXYZ(0, 0, 0); 
    
-    // Set values for what is considered a TAP and what is a DOUBLE TAP (0-255)
+    // Set values for what is considered a TAP and what is a float TAP (0-255)
     adxl.setTapThreshold(50);           // 62.5 mg per increment
     adxl.setTapDuration(15);            // 625 μs per increment
-    adxl.setDoubleTapLatency(80);       // 1.25 ms per increment
-    adxl.setDoubleTapWindow(200);       // 1.25 ms per increment
+    adxl.setfloatTapLatency(80);       // 1.25 ms per increment
+    adxl.setfloatTapWindow(200);       // 1.25 ms per increment
    
     // Set values for what is considered FREE FALL (0-255)
     adxl.setFreeFallThreshold(7);       // (5 - 9) recommended - 62.5mg per increment
@@ -239,7 +325,7 @@ void adjAccel() {
     adxl.InactivityINT(0);
     adxl.ActivityINT(0);
     adxl.FreeFallINT(0);
-    adxl.doubleTapINT(0);
+    adxl.floatTapINT(0);
     adxl.singleTapINT(0);
   
   }
@@ -331,75 +417,14 @@ void Piezometer(int _piezoPin, unsigned long period, int dutyCycle) {
   delay(period);
 }
 
-void readingsToSerial(unsigned long readingMillis, int x, int y, int z) {
-  Serial.print(readingMillis);
-  Serial.print(", ");
-  Serial.print(x);
-  Serial.print(", ");
-  Serial.print(y);
-  Serial.print(", ");
-  Serial.print(z);
-  Serial.println();
-}
-
-void readingsToSerial(double x, double y, double z) {
-  Serial.print(x);
-  Serial.print(", ");
-  Serial.print(y);
-  Serial.print(", ");
-  Serial.print(z);
-  Serial.println();
-}
-
 void SDModuleSetup(int SDpin) {
   //Initialize SD card
   Serial.print("Initializing SD card...");
 
   if (!SD.begin(SDpin)) {
     Serial.println("initialization failed!");
-
+  
   } else {
     Serial.println("initialization done.");
   }
-}
-
-void writeToFile(unsigned long currentMillis, int x, int y, int z) {
-  myFile.print(currentMillis);
-  myFile.print(", ");
-  myFile.print(x);
-  myFile.print(", ");
-  myFile.print(y);
-  myFile.print(", ");
-  myFile.print(z);
-  myFile.print("\n");
-}
-
-void writeToFile(double x, double y, double z) {
-  myFile.print(x);
-  myFile.print(", ");
-  myFile.print(y);
-  myFile.print(", ");
-  myFile.print(z);
-  myFile.print("\n");
-}
-
-void writeToFile(String parameter, int address, String outputDataType) {
-  byte value;
-  #ifdef ACCEL_ADXL345
-    adxl.readFrom(address, 1, &value);
-  #endif
-  myFile.print(parameter);
-  if (outputDataType == "HEX") {
-    myFile.print("0x");
-    myFile.println(value, HEX);
-  } else if(outputDataType == "DEC") {
-    myFile.println(value, DEC);
-  }
-  myFile.flush();
-}
-
-void writeToFile(String parameter, String value) {
-  myFile.print(parameter);
-  myFile.println(value);
-  myFile.flush();
 }
